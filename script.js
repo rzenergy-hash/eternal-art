@@ -236,7 +236,7 @@
     health[idx] = 0;
     // hold the empty hole before it is allowed to restore (delay)
     const t = (params.restoration - 1) / 99;
-    timer[idx] = lerp(240, 6, t); // low restoration → wound lingers much longer
+    timer[idx] = lerp(360, 6, t); // low restoration → wound lingers much longer
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
 
     // quantity scales with the density control
