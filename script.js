@@ -551,29 +551,22 @@
     const SPB = 12;                                       // eighth-notes per 6/4 bar
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
     // 8-bar progression in G major. arp = rippling pool, pad = soft string bed.
+    // 4-bar loop: 2 bars of the cello theme, then a 2-bar accompaniment "breath"
     const bars = [
-      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G  (bass G2)
-      { bass: 40, pad: [52, 55, 59],     arp: [52, 55, 59, 64, 67, 71] }, // Em (E2)
-      { bass: 36, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C  (C2)
-      { bass: 38, pad: [50, 54, 57],     arp: [50, 54, 57, 62, 66, 69] }, // D  (D2)
-      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
-      { bass: 36, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
-      { bass: 38, pad: [50, 54, 57, 60], arp: [50, 54, 57, 60, 62, 66] }, // D7
-      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G (theme)
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G (theme)
+      { bass: 38, pad: [50, 54, 57, 60], arp: [50, 54, 57, 60, 62, 66] }, // D7 (breath)
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G (breath/resolve)
     ];
     const ripple = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0]; // up-then-down per bar
-    const LOOP = bars.length * SPB;                        // 96 eighth-notes
-    // singing cello melody as onsets: [stepInLoop, midi, durationInEighths]
-    // in the cello's warm tenor register (long bowed, sighing descents)
+    const LOOP = bars.length * SPB;                       // 48 eighth-notes
+    // Cello melody — Saint-Saëns' "The Swan" opening, the exact note sequence:
+    //   D – G – G – G – F# – G  |  B – A – G – B – D
+    // [stepInLoop, midi, durationInEighths], in the cello's tenor register.
     const melodySeq = [
-      [0, 67, 6], [6, 66, 3], [9, 64, 3],      // G : G4 F#4 E4
-      [12, 62, 6], [18, 64, 3], [21, 67, 3],   // Em: D4 E4 G4
-      [24, 64, 6], [30, 62, 3], [33, 60, 3],   // C : E4 D4 C4
-      [36, 66, 8], [44, 62, 4],                // D : F#4 (long) D4
-      [48, 67, 6], [54, 71, 4], [58, 69, 2],   // G : G4 B4 A4
-      [60, 72, 6], [66, 69, 3], [69, 67, 3],   // C : C5 (peak) A4 G4
-      [72, 66, 6], [78, 69, 3], [81, 66, 3],   // D7: F#4 A4 F#4
-      [84, 62, 6], [90, 67, 6],                // G : D4 G4 (resolve)
+      [0, 62, 2], [2, 67, 4], [6, 67, 2], [8, 67, 1], [9, 66, 1], [10, 67, 2], // D G(long) G G F# G
+      [12, 71, 2], [14, 69, 2], [16, 67, 2], [18, 71, 2], [20, 74, 4],         // B A G B D(long)
+      // bars 3–4: the cello rests; only the rippling accompaniment breathes
     ];
     const melAt = {};
     melodySeq.forEach(([s, n, d]) => { melAt[s] = [n, d]; });
