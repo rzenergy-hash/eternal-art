@@ -552,27 +552,28 @@
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
     // 8-bar progression in G major. arp = rippling pool, pad = soft string bed.
     const bars = [
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G  (bass G2)
+      { bass: 40, pad: [52, 55, 59],     arp: [52, 55, 59, 64, 67, 71] }, // Em (E2)
+      { bass: 36, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C  (C2)
+      { bass: 38, pad: [50, 54, 57],     arp: [50, 54, 57, 62, 66, 69] }, // D  (D2)
       { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
-      { bass: 40, pad: [52, 55, 59],     arp: [52, 55, 59, 64, 67, 71] }, // Em
-      { bass: 48, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
-      { bass: 50, pad: [50, 54, 57],     arp: [50, 54, 57, 62, 66, 69] }, // D
-      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
-      { bass: 48, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
-      { bass: 50, pad: [50, 54, 57, 60], arp: [50, 54, 57, 60, 62, 66] }, // D7
+      { bass: 36, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
+      { bass: 38, pad: [50, 54, 57, 60], arp: [50, 54, 57, 60, 62, 66] }, // D7
       { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
     ];
     const ripple = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0]; // up-then-down per bar
     const LOOP = bars.length * SPB;                        // 96 eighth-notes
-    // singing melody as onsets: [stepInLoop, midi, durationInEighths]
+    // singing cello melody as onsets: [stepInLoop, midi, durationInEighths]
+    // in the cello's warm tenor register (long bowed, sighing descents)
     const melodySeq = [
-      [2, 74, 6], [8, 79, 4],                  // G : D5 → G5
-      [12, 76, 6], [18, 79, 3], [21, 78, 3],   // Em: E5, G5, F#5
-      [24, 76, 6], [30, 72, 3], [33, 74, 3],   // C : E5, C5, D5
-      [36, 78, 8], [44, 74, 4],                // D : F#5 (long), D5
-      [48, 79, 6], [54, 83, 4], [58, 81, 2],   // G : G5, B5, A5
-      [60, 84, 6], [66, 81, 3], [69, 79, 3],   // C : C6 (peak), A5, G5
-      [72, 78, 6], [78, 81, 3], [81, 78, 3],   // D7: F#5, A5, F#5
-      [84, 74, 6], [90, 79, 6],                // G : D5, G5 (resolve)
+      [0, 67, 6], [6, 66, 3], [9, 64, 3],      // G : G4 F#4 E4
+      [12, 62, 6], [18, 64, 3], [21, 67, 3],   // Em: D4 E4 G4
+      [24, 64, 6], [30, 62, 3], [33, 60, 3],   // C : E4 D4 C4
+      [36, 66, 8], [44, 62, 4],                // D : F#4 (long) D4
+      [48, 67, 6], [54, 71, 4], [58, 69, 2],   // G : G4 B4 A4
+      [60, 72, 6], [66, 69, 3], [69, 67, 3],   // C : C5 (peak) A4 G4
+      [72, 66, 6], [78, 69, 3], [81, 66, 3],   // D7: F#4 A4 F#4
+      [84, 62, 6], [90, 67, 6],                // G : D4 G4 (resolve)
     ];
     const melAt = {};
     melodySeq.forEach(([s, n, d]) => { melAt[s] = [n, d]; });
@@ -600,16 +601,22 @@
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     }
 
-    // singing string melody: detuned sawtooths with a gentle vibrato
+    // singing cello melody: warm bowed tone (saw ensemble + sine core) + vibrato
     function strings(freq, t, dur, vel) {
-      const g = ac.createGain(); adsr(g, t, 0.18, dur + 0.15, vel); g.connect(filter);
-      const lfo = ac.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 5.3;
-      const lg = ac.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(7, t + 0.6);
-      lfo.connect(lg); lfo.start(t); lfo.stop(t + dur + 0.3);
-      [-6, 0, 6].forEach((d) => {
+      const g = ac.createGain(); adsr(g, t, 0.16, dur + 0.18, vel); g.connect(filter);
+      const lp = ac.createBiquadFilter(); lp.type = "lowpass";
+      lp.frequency.value = Math.min(2600, freq * 5 + 500); lp.Q.value = 0.7; lp.connect(g);
+      const lfo = ac.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 5.0;
+      const lg = ac.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(6, t + 0.6);
+      lfo.connect(lg); lfo.start(t); lfo.stop(t + dur + 0.35);
+      [-5, 5].forEach((d) => {
         const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
-        lg.connect(o.detune); o.connect(g); o.start(t); o.stop(t + dur + 0.3);
+        lg.connect(o.detune); o.connect(lp); o.start(t); o.stop(t + dur + 0.35);
       });
+      // warm sine fundamental for body
+      const og = ac.createGain(); og.gain.value = 0.55; og.connect(g);
+      const os = ac.createOscillator(); os.type = "sine"; os.frequency.value = freq;
+      lg.connect(os.detune); os.connect(og); os.start(t); os.stop(t + dur + 0.35);
     }
     // soft sustained string bed
     function pad(freq, t, dur, vel) {
@@ -630,11 +637,19 @@
       const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
       o.connect(g); o.start(t); o.stop(t + dur + 0.1);
     }
-    // gentle low bass
+    // deep cello low register — warm, bowed, rich (saw ensemble + sine) + vibrato
     function bass(freq, t, dur, vel) {
-      const g = ac.createGain(); adsr(g, t, 0.3, dur, vel); g.connect(filter);
-      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
-      o.connect(g); o.start(t); o.stop(t + dur + 0.2);
+      const g = ac.createGain(); adsr(g, t, 0.25, dur, vel); g.connect(filter);
+      const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1100; lp.Q.value = 0.8; lp.connect(g);
+      const lfo = ac.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 4.6;
+      const lg = ac.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(5, t + 0.8);
+      lfo.connect(lg); lfo.start(t); lfo.stop(t + dur + 0.3);
+      [-4, 4].forEach((d) => {
+        const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
+        lg.connect(o.detune); o.connect(lp); o.start(t); o.stop(t + dur + 0.3);
+      });
+      const og = ac.createGain(); og.gain.value = 0.7; og.connect(g);
+      const os = ac.createOscillator(); os.type = "sine"; os.frequency.value = freq; os.connect(og); os.start(t); os.stop(t + dur + 0.3);
     }
 
     function schedule() {
@@ -648,12 +663,12 @@
         ripplePluck(mtof(pool[ripple[b] % pool.length]), nextTime, 0.05);
         // bar start: soft bass + warm sustained string bed
         if (b === 0) {
-          bass(mtof(bar.bass), nextTime, barDur * 1.02, 0.1);
-          bar.pad.forEach((m) => pad(mtof(m), nextTime, barDur * 1.05, 0.02));
+          bass(mtof(bar.bass), nextTime, barDur * 1.02, 0.15);       // deep cello
+          bar.pad.forEach((m) => pad(mtof(m), nextTime, barDur * 1.05, 0.016));
         }
-        // the singing melody
+        // the singing cello melody
         const mo = melAt[s];
-        if (mo) strings(mtof(mo[0]), nextTime, mo[1] * stepDur, 0.14);
+        if (mo) strings(mtof(mo[0]), nextTime, mo[1] * stepDur, 0.16);
         step++;
         nextTime += stepDur;
       }
