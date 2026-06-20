@@ -540,105 +540,122 @@
     });
   }
 
-  // ---- flowing, lyrical waltz (synthesized, no external files) -------------
-  // A graceful 3/4 classical waltz: a deep "oom" bass + soft "pah-pah" chords,
-  // a warm string bed, and a singing, arching melody on top — melodious and
-  // lilting, a serene counterpoint to the breaking.
+  // ---- "The Swan" — synthesized string-orchestra arrangement ---------------
+  // Saint-Saëns' Le Cygne (public domain) in spirit: G major, slow 6/4, the
+  // signature rippling arpeggio accompaniment beneath a long, singing string
+  // melody with vibrato. An original rendering of the score — not a recording.
   const music = (() => {
     let ac = null, master, comp, filter, delayA, fbA, delayB, fbB;
     let playing = false, timer = null, step = 0, nextTime = 0;
-    const BPM = 90, beat = 60 / BPM, BPB = 3; // 3/4 waltz
+    const BPM = 58, beat = 60 / BPM, stepDur = beat / 2; // eighth-note clock
+    const SPB = 12;                                       // eighth-notes per 6/4 bar
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-    // each bar: a deep bass note + mid chord tones (octaves added in code)
+    // 8-bar progression in G major. arp = rippling pool, pad = soft string bed.
     const bars = [
-      { bass: 48, tones: [60, 64, 67] }, // C   (I)
-      { bass: 43, tones: [55, 59, 62] }, // G   (V)
-      { bass: 45, tones: [57, 60, 64] }, // Am  (vi)
-      { bass: 41, tones: [53, 57, 60] }, // F   (IV)
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
+      { bass: 40, pad: [52, 55, 59],     arp: [52, 55, 59, 64, 67, 71] }, // Em
+      { bass: 48, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
+      { bass: 50, pad: [50, 54, 57],     arp: [50, 54, 57, 62, 66, 69] }, // D
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
+      { bass: 48, pad: [48, 52, 55],     arp: [48, 52, 55, 60, 64, 67] }, // C
+      { bass: 50, pad: [50, 54, 57, 60], arp: [50, 54, 57, 60, 62, 66] }, // D7
+      { bass: 43, pad: [55, 59, 62],     arp: [55, 59, 62, 67, 71, 74] }, // G
     ];
-    // singing melody, one note per beat over the 4-bar / 12-beat phrase
-    const melody = [
-      72, 76, 79,   // C : rise C-E-G
-      81, 79, 74,   // G : peak then fall
-      76, 72, 69,   // Am: gentle descent
-      72, 77, 79,   // F : lift back toward the top
+    const ripple = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0]; // up-then-down per bar
+    const LOOP = bars.length * SPB;                        // 96 eighth-notes
+    // singing melody as onsets: [stepInLoop, midi, durationInEighths]
+    const melodySeq = [
+      [2, 74, 6], [8, 79, 4],                  // G : D5 → G5
+      [12, 76, 6], [18, 79, 3], [21, 78, 3],   // Em: E5, G5, F#5
+      [24, 76, 6], [30, 72, 3], [33, 74, 3],   // C : E5, C5, D5
+      [36, 78, 8], [44, 74, 4],                // D : F#5 (long), D5
+      [48, 79, 6], [54, 83, 4], [58, 81, 2],   // G : G5, B5, A5
+      [60, 84, 6], [66, 81, 3], [69, 79, 3],   // C : C6 (peak), A5, G5
+      [72, 78, 6], [78, 81, 3], [81, 78, 3],   // D7: F#5, A5, F#5
+      [84, 74, 6], [90, 79, 6],                // G : D5, G5 (resolve)
     ];
+    const melAt = {};
+    melodySeq.forEach(([s, n, d]) => { melAt[s] = [n, d]; });
 
     function build() {
       const AC = window.AudioContext || window.webkitAudioContext;
       ac = new AC();
       master = ac.createGain(); master.gain.value = 0.0001;
-      comp = ac.createDynamicsCompressor();                  // glue + prevent clipping
+      comp = ac.createDynamicsCompressor();
       filter = ac.createBiquadFilter();
-      filter.type = "lowpass"; filter.frequency.value = 2900; filter.Q.value = 0.6;
-      // two delay taps → a big, slow concert-hall reverberation
-      delayA = ac.createDelay(2); delayA.delayTime.value = 0.45; fbA = ac.createGain(); fbA.gain.value = 0.42;
-      delayB = ac.createDelay(2); delayB.delayTime.value = 0.73; fbB = ac.createGain(); fbB.gain.value = 0.34;
+      filter.type = "lowpass"; filter.frequency.value = 2700; filter.Q.value = 0.5;
+      // two delay taps → a warm concert-hall reverberation
+      delayA = ac.createDelay(2); delayA.delayTime.value = 0.4; fbA = ac.createGain(); fbA.gain.value = 0.38;
+      delayB = ac.createDelay(2); delayB.delayTime.value = 0.7; fbB = ac.createGain(); fbB.gain.value = 0.32;
       filter.connect(master);
       filter.connect(delayA); delayA.connect(fbA); fbA.connect(delayA); delayA.connect(master);
       filter.connect(delayB); delayB.connect(fbB); fbB.connect(delayB); delayB.connect(master);
       master.connect(comp); comp.connect(ac.destination);
     }
 
-    // swelling envelope: slow attack, sustain, gentle release
-    function env(g, t, atk, dur, vel) {
+    function adsr(g, t, atk, dur, vel) {
       g.gain.setValueAtTime(0.0001, t);
       g.gain.linearRampToValueAtTime(vel, t + atk);
-      g.gain.setValueAtTime(vel, t + dur * 0.6);
+      g.gain.setValueAtTime(vel, t + Math.max(atk + 0.05, dur * 0.7));
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     }
 
-    // lush string-ensemble note: three detuned sawtooths
+    // singing string melody: detuned sawtooths with a gentle vibrato
+    function strings(freq, t, dur, vel) {
+      const g = ac.createGain(); adsr(g, t, 0.18, dur + 0.15, vel); g.connect(filter);
+      const lfo = ac.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 5.3;
+      const lg = ac.createGain(); lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(7, t + 0.6);
+      lfo.connect(lg); lfo.start(t); lfo.stop(t + dur + 0.3);
+      [-6, 0, 6].forEach((d) => {
+        const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
+        lg.connect(o.detune); o.connect(g); o.start(t); o.stop(t + dur + 0.3);
+      });
+    }
+    // soft sustained string bed
     function pad(freq, t, dur, vel) {
-      const g = ac.createGain(); env(g, t, 1.4, dur, vel); g.connect(filter);
-      [-9, 0, 9].forEach((d) => {
+      const g = ac.createGain(); adsr(g, t, 1.4, dur, vel); g.connect(filter);
+      [-7, 7].forEach((d) => {
         const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
         o.connect(g); o.start(t); o.stop(t + dur + 0.2);
       });
     }
-    // deep bass with a sub-octave for weight
-    function bass(freq, t, dur, vel) {
-      const g = ac.createGain(); env(g, t, 0.5, dur, vel); g.connect(filter);
-      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
-      const s = ac.createOscillator(); s.type = "sine"; s.frequency.value = freq / 2;
-      o.connect(g); s.connect(g); o.start(t); s.start(t); o.stop(t + dur + 0.2); s.stop(t + dur + 0.2);
-    }
-    // stately melodic voice
-    function mel(freq, t, dur, vel) {
-      const g = ac.createGain(); env(g, t, 0.1, dur, vel); g.connect(filter);
-      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
-      const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq * 2; o2.detune.value = 5;
-      o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
-    }
-    // soft waltz "pah" — a gentle plucked mid chord
-    function pluck(freq, t, dur, vel) {
+    // rippling accompaniment note (harp/pizzicato-like)
+    function ripplePluck(freq, t, vel) {
+      const dur = stepDur * 2.4;
       const g = ac.createGain();
       g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(vel, t + 0.03);
+      g.gain.linearRampToValueAtTime(vel, t + 0.012);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
       g.connect(filter);
       const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
       o.connect(g); o.start(t); o.stop(t + dur + 0.1);
     }
+    // gentle low bass
+    function bass(freq, t, dur, vel) {
+      const g = ac.createGain(); adsr(g, t, 0.3, dur, vel); g.connect(filter);
+      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
+      o.connect(g); o.start(t); o.stop(t + dur + 0.2);
+    }
 
     function schedule() {
       while (nextTime < ac.currentTime + 0.3) {
-        const bar = bars[((step / BPB) | 0) % bars.length];
-        const b = step % BPB;       // 0 = downbeat, 1 & 2 = off-beats
-        const barDur = beat * BPB;
+        const s = step % LOOP;
+        const bar = bars[(s / SPB) | 0];
+        const b = s % SPB;
+        const barDur = stepDur * SPB;
+        // continuous rippling arpeggio — one note each eighth
+        const pool = bar.arp;
+        ripplePluck(mtof(pool[ripple[b] % pool.length]), nextTime, 0.05);
+        // bar start: soft bass + warm sustained string bed
         if (b === 0) {
-          // "oom" — deep bass + a warm sustained string bed for the whole bar
-          bass(mtof(bar.bass - 12), nextTime, beat * 1.15, 0.16);
-          bar.tones.forEach((m) => pad(mtof(m), nextTime, barDur * 1.02, 0.028));
-        } else {
-          // "pah pah" — soft mid chord on the off-beats
-          bar.tones.forEach((m) => pluck(mtof(m), nextTime, beat * 0.9, 0.04));
+          bass(mtof(bar.bass), nextTime, barDur * 1.02, 0.1);
+          bar.pad.forEach((m) => pad(mtof(m), nextTime, barDur * 1.05, 0.02));
         }
-        // singing, legato melody — one note per beat, slight overlap
-        const mn = melody[step % melody.length];
-        if (mn) mel(mtof(mn), nextTime, beat * 1.3, 0.12);
+        // the singing melody
+        const mo = melAt[s];
+        if (mo) strings(mtof(mo[0]), nextTime, mo[1] * stepDur, 0.14);
         step++;
-        nextTime += beat;
+        nextTime += stepDur;
       }
     }
 
@@ -649,7 +666,7 @@
       playing = true;
       master.gain.cancelScheduledValues(ac.currentTime);
       master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), ac.currentTime);
-      master.gain.linearRampToValueAtTime(0.32, ac.currentTime + 3.0); // gentle swell-in
+      master.gain.linearRampToValueAtTime(0.3, ac.currentTime + 3.0); // gentle swell-in
     }
 
     function mute() {
