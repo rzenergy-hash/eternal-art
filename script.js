@@ -490,7 +490,7 @@
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (!fsEl) {
       const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (req) req.call(el).catch(() => {});
+      if (req) { const p = req.call(el); if (p && p.catch) p.catch(() => {}); }
     } else {
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       if (exit) exit.call(document);
