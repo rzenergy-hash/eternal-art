@@ -197,6 +197,39 @@ html, body {
 }
 .panel__reset:hover { color: var(--ink); border-color: var(--ink-dim); }
 
+/* --- music toggle --------------------------------------------------------- */
+.sound {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+}
+.sound:hover { color: #fff; transform: scale(1.06); }
+.sound.muted { opacity: 0.55; color: var(--ink-dim); }
+/* diagonal slash when muted */
+.sound.muted::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 1.5px;
+  background: currentColor;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
 /* --- fullscreen hint ------------------------------------------------------ */
 .hint {
   position: fixed;

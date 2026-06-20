@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Eternal</title>
-  <link rel="stylesheet" href="style.css?v=2" />
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
   <!-- Soft atmospheric glow lives behind the canvas (CSS), so the canvas
@@ -14,8 +14,11 @@
   <!-- The artwork. Particles are drawn here every frame. -->
   <canvas id="scene"></canvas>
 
-  <!-- Subtle fullscreen hint (fades away on its own) -->
-  <div class="hint">press <kbd>F</kbd> for fullscreen</div>
+  <!-- Subtle hint (fades away on its own) -->
+  <div class="hint">press <kbd>F</kbd> for fullscreen · <kbd>M</kbd> to mute</div>
+
+  <!-- Music toggle (synthesized ambient classical) -->
+  <button id="soundToggle" class="sound muted" aria-label="Toggle music">♪</button>
 
   <!-- Adjustable parameters. Collapsible so it never intrudes on the piece. -->
   <aside id="panel" class="panel collapsed">
@@ -60,6 +63,6 @@
   <!-- Shown until the image is decoded and the particle field is built. -->
   <div id="loader" class="loader"><span>summoning the dust…</span></div>
 
-  <script src="script.js?v=2"></script>
+  <script src="script.js?v=3"></script>
 </body>
 </html>

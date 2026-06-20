@@ -540,6 +540,104 @@
     });
   }
 
+  // ---- ambient classical music (fully synthesized, no external files) ------
+  // A slow, gentle vi–IV–I–V progression with a soft pad and an arpeggio —
+  // a calm classical counterpoint to the violence of the breaking.
+  const music = (() => {
+    let ac = null, master, filter, delay, fb;
+    let playing = false, timer = null, step = 0, nextTime = 0;
+    const BPM = 54, beat = 60 / BPM;
+    const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+    const prog = [
+      [57, 60, 64], // Am
+      [53, 57, 60], // F
+      [60, 64, 67], // C
+      [55, 59, 62], // G
+    ];
+
+    function build() {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      ac = new AC();
+      master = ac.createGain(); master.gain.value = 0.0001;
+      filter = ac.createBiquadFilter();
+      filter.type = "lowpass"; filter.frequency.value = 2200;
+      delay = ac.createDelay(1.0); delay.delayTime.value = 0.34;
+      fb = ac.createGain(); fb.gain.value = 0.34;            // soft echo for space
+      filter.connect(master);
+      filter.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(master);
+      master.connect(ac.destination);
+    }
+
+    // one soft note: a triangle/sine pair with a gentle pluck/pad envelope
+    function voice(freq, t, dur, vel, type) {
+      const o = ac.createOscillator(); o.type = type || "triangle"; o.frequency.value = freq;
+      const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq * 2; o2.detune.value = 5;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vel, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); o2.connect(g); g.connect(filter);
+      o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+    }
+
+    function schedule() {
+      while (nextTime < ac.currentTime + 0.25) {
+        const chord = prog[(step >> 2) % prog.length];
+        const b = step & 3;
+        if (b === 0) chord.forEach((m) => voice(mtof(m), nextTime, beat * 4.2, 0.05, "sine")); // pad
+        if (Math.random() > 0.18) {                                  // arpeggio (with rests)
+          const m = chord[b % chord.length] + 12 + (Math.random() < 0.25 ? 12 : 0);
+          voice(mtof(m), nextTime, beat * 1.8, 0.085, "triangle");
+        }
+        step++;
+        nextTime += beat;
+      }
+    }
+
+    function play() {
+      if (!ac) build();
+      if (ac.state === "suspended") ac.resume();
+      if (!timer) { nextTime = ac.currentTime + 0.1; timer = setInterval(schedule, 50); }
+      playing = true;
+      master.gain.cancelScheduledValues(ac.currentTime);
+      master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), ac.currentTime);
+      master.gain.linearRampToValueAtTime(0.16, ac.currentTime + 2.0);
+    }
+
+    function mute() {
+      if (!ac) return;
+      master.gain.cancelScheduledValues(ac.currentTime);
+      master.gain.setValueAtTime(master.gain.value, ac.currentTime);
+      master.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.6);
+      if (timer) { clearInterval(timer); timer = null; }
+      playing = false;
+    }
+
+    return {
+      play, mute,
+      toggle() { playing ? mute() : play(); return playing; },
+      get playing() { return playing; },
+    };
+  })();
+
+  // sound button + M key, and auto-start on the first user gesture
+  const soundBtn = document.getElementById("soundToggle");
+  function reflectSound() { if (soundBtn) soundBtn.classList.toggle("muted", !music.playing); }
+  if (soundBtn) soundBtn.addEventListener("click", () => { music.toggle(); reflectSound(); });
+  window.addEventListener("keydown", (e) => {
+    if ((e.key === "m" || e.key === "M") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault(); music.toggle(); reflectSound();
+    }
+  });
+  let audioKicked = false;
+  function kickAudio() {
+    if (audioKicked) return;
+    audioKicked = true;
+    music.play(); reflectSound();
+  }
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) =>
+    window.addEventListener(ev, kickAudio));
+
   // ---- boot ---------------------------------------------------------------
   function start() {
     bindControls();
