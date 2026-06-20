@@ -105,14 +105,9 @@
   function setup() {
     if (!sourceImg) return;
     const cssW = window.innerWidth, cssH = window.innerHeight;
-    // Render scale: start from the device pixel ratio, but cap the total buffer
-    // area so large windows stay smooth (doubling width would otherwise 4x the
-    // per-frame pixel cost). Coordinates all use `dpr`, so capping it is safe.
-    let rscale = Math.min(window.devicePixelRatio || 1, 2);
-    const MAX_AREA = 2_500_000; // ~1920x1300 worth of pixels
-    const area = cssW * cssH * rscale * rscale;
-    if (area > MAX_AREA) rscale = Math.max(0.75, rscale * Math.sqrt(MAX_AREA / area));
-    dpr = rscale;
+    // Full resolution (standard retina cap of 2x). The heavy per-frame work was
+    // optimised away (no per-fragment clip, single base blit), so no downscale.
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
     W = Math.floor(cssW * dpr);
     H = Math.floor(cssH * dpr);
 
@@ -194,17 +189,21 @@
   // ---- spawning -----------------------------------------------------------
   function spawnFrag(x, y, vx, vy, ss, stage, col) {
     if (frags.length >= MAX_FRAG) return;
-    const sx = clamp(x - ss / 2, 0, W - ss);
-    const sy = clamp(y - ss / 2, 0, H - ss);
     const poly = makeShard();
     // polygon area ≈ mass → heavier pieces rotate & decay a touch slower
     let area = 0;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
       area += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
     const mass = clamp(Math.abs(area) * 0.5, 0.15, 1);
+    // flat-shade the marble colour once (random facet brightness) so we can fill
+    // the shard with a single solid colour — far cheaper than a per-frame clip.
+    const sh = rand(0.72, 1.12);
+    const r = clamp((col[0] * sh) | 0, 0, 255);
+    const g = clamp((col[1] * sh) | 0, 0, 255);
+    const b = clamp((col[2] * sh) | 0, 0, 255);
     frags.push({
       x, y, vx, vy,
-      sx, sy, ss, poly, mass,
+      ss, poly, mass,
       rot: Math.random() * Math.PI * 2,
       // unique angular velocity, scaled down for heavier pieces
       vrot: rand(-0.22, 0.22) * (stage === "large" ? 1 : 2.2) / (0.5 + mass),
@@ -213,6 +212,7 @@
       stage,
       split: false,
       cr: col[0], cg: col[1], cb: col[2],
+      fill: `rgb(${r},${g},${b})`,
     });
   }
 
@@ -224,7 +224,7 @@
       decay: rand(0.003, 0.009),          // dust floats the longest
       size: Math.max(1, (params.particleSize - 1) + (Math.random() < 0.5 ? 0 : 1)),
       phase: Math.random() * Math.PI * 2, // for swirl
-      r: col[0], g: col[1], b: col[2],
+      cs: `rgb(${col[0]},${col[1]},${col[2]})`, // precomputed (no per-frame build)
     });
   }
 
@@ -341,9 +341,11 @@
     // One full-screen blit (the base), then a small black jagged polygon per
     // damaged cell (alpha = how broken it is). Far cheaper than compositing
     // separate mask/comp layers every frame, especially on large windows.
-    ctx.globalCompositeOperation = "source-over";
-    ctx.clearRect(0, 0, W, H);
+    // "copy" replaces the whole canvas with the base in a single pass (clears
+    // the previous frame + draws the statue at once), saving a full-screen op.
+    ctx.globalCompositeOperation = "copy";
     ctx.drawImage(baseCanvas, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
 
     ctx.fillStyle = "#050506";
     const nv = 9;
@@ -407,21 +409,23 @@
         continue;
       }
 
-      const ds = p.ss * (0.5 + p.life * 0.5); // shrink as it ages
-      const half = ds / 2;
+      // Draw the shard as a solid marble-coloured polygon. We transform the
+      // vertices in JS and fill in absolute coords — no per-frame save/rotate/
+      // clip/drawImage, which is dramatically cheaper at full resolution.
+      const half = p.ss * (0.5 + p.life * 0.5) * 0.5; // shrinks as it ages
       const poly = p.poly;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rot);
+      const co = Math.cos(p.rot), si = Math.sin(p.rot);
+      const x = p.x, y = p.y;
       ctx.globalAlpha = clamp(p.life * 1.3, 0, 1) * gOpacity;
-      // clip to the irregular shard silhouette, then fill with real marble texture
+      ctx.fillStyle = p.fill;
       ctx.beginPath();
-      ctx.moveTo(poly[0][0] * half, poly[0][1] * half);
-      for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k][0] * half, poly[k][1] * half);
+      for (let k = 0; k < poly.length; k++) {
+        const lx = poly[k][0] * half, ly = poly[k][1] * half;
+        const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
       ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(baseCanvas, p.sx, p.sy, p.ss, p.ss, -half, -half, ds, ds);
-      ctx.restore();
+      ctx.fill();
     }
     ctx.globalAlpha = 1;
 
@@ -441,7 +445,7 @@
         continue;
       }
       ctx.globalAlpha = p.life * gOpacity;
-      ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`;
+      ctx.fillStyle = p.cs;
       ctx.fillRect(p.x | 0, p.y | 0, p.size, p.size);
     }
     ctx.globalAlpha = 1;
