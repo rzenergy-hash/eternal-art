@@ -484,6 +484,30 @@
     resizeTimer = setTimeout(setup, 160);
   });
 
+  // ---- fullscreen (press F) -----------------------------------------------
+  function toggleFullscreen() {
+    const el = document.documentElement;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!fsEl) {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) req.call(el).catch(() => {});
+    } else {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) exit.call(document);
+    }
+  }
+  window.addEventListener("keydown", (e) => {
+    // ignore when typing in a control; toggle on F
+    if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+  });
+  // entering/leaving fullscreen changes the viewport → rebuild buffers
+  const onFsChange = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(setup, 60); };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("webkitfullscreenchange", onFsChange);
+
   // ---- control panel ------------------------------------------------------
   function bindControls() {
     const ids = Object.keys(params);

@@ -197,6 +197,39 @@ html, body {
 }
 .panel__reset:hover { color: var(--ink); border-color: var(--ink-dim); }
 
+/* --- fullscreen hint ------------------------------------------------------ */
+.hint {
+  position: fixed;
+  left: 50%;
+  bottom: clamp(20px, 5vh, 48px);
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+  user-select: none;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: lowercase;
+  color: rgba(235, 230, 222, 0.42);
+  /* visible briefly, then fades away */
+  animation: hintFade 5s ease forwards;
+}
+.hint kbd {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid rgba(235, 230, 222, 0.3);
+  border-radius: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+@keyframes hintFade {
+  0%   { opacity: 0; }
+  15%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* --- loader --------------------------------------------------------------- */
 .loader {
   position: fixed;
