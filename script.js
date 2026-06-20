@@ -540,54 +540,97 @@
     });
   }
 
-  // ---- ambient classical music (fully synthesized, no external files) ------
-  // A slow, gentle vi–IV–I–V progression with a soft pad and an arpeggio —
-  // a calm classical counterpoint to the violence of the breaking.
+  // ---- grand classical music (fully synthesized, no external files) --------
+  // A slow, majestic Am–F–C–E (harmonic-minor cadence) with a deep bass, lush
+  // detuned string-ensemble pads with octave doublings, a soft timpani swell,
+  // and a large hall reverb — a sweeping counterpoint to the breaking.
   const music = (() => {
-    let ac = null, master, filter, delay, fb;
+    let ac = null, master, comp, filter, delayA, fbA, delayB, fbB;
     let playing = false, timer = null, step = 0, nextTime = 0;
-    const BPM = 54, beat = 60 / BPM;
+    const BPM = 50, beat = 60 / BPM, BPB = 4; // beats per bar
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-    const prog = [
-      [57, 60, 64], // Am
-      [53, 57, 60], // F
-      [60, 64, 67], // C
-      [55, 59, 62], // G
+    // each bar: a deep bass note + mid chord tones (octaves added in code)
+    const bars = [
+      { bass: 45, tones: [57, 60, 64] }, // Am
+      { bass: 41, tones: [57, 60, 65] }, // F
+      { bass: 48, tones: [60, 64, 67] }, // C
+      { bass: 40, tones: [56, 59, 64] }, // E (major — dramatic cadence)
     ];
 
     function build() {
       const AC = window.AudioContext || window.webkitAudioContext;
       ac = new AC();
       master = ac.createGain(); master.gain.value = 0.0001;
+      comp = ac.createDynamicsCompressor();                  // glue + prevent clipping
       filter = ac.createBiquadFilter();
-      filter.type = "lowpass"; filter.frequency.value = 2200;
-      delay = ac.createDelay(1.0); delay.delayTime.value = 0.34;
-      fb = ac.createGain(); fb.gain.value = 0.34;            // soft echo for space
+      filter.type = "lowpass"; filter.frequency.value = 2000; filter.Q.value = 0.6;
+      // two delay taps → a big, slow concert-hall reverberation
+      delayA = ac.createDelay(2); delayA.delayTime.value = 0.45; fbA = ac.createGain(); fbA.gain.value = 0.42;
+      delayB = ac.createDelay(2); delayB.delayTime.value = 0.73; fbB = ac.createGain(); fbB.gain.value = 0.34;
       filter.connect(master);
-      filter.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(master);
-      master.connect(ac.destination);
+      filter.connect(delayA); delayA.connect(fbA); fbA.connect(delayA); delayA.connect(master);
+      filter.connect(delayB); delayB.connect(fbB); fbB.connect(delayB); delayB.connect(master);
+      master.connect(comp); comp.connect(ac.destination);
     }
 
-    // one soft note: a triangle/sine pair with a gentle pluck/pad envelope
-    function voice(freq, t, dur, vel, type) {
-      const o = ac.createOscillator(); o.type = type || "triangle"; o.frequency.value = freq;
+    // swelling envelope: slow attack, sustain, gentle release
+    function env(g, t, atk, dur, vel) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vel, t + atk);
+      g.gain.setValueAtTime(vel, t + dur * 0.6);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    }
+
+    // lush string-ensemble note: three detuned sawtooths
+    function pad(freq, t, dur, vel) {
+      const g = ac.createGain(); env(g, t, 1.4, dur, vel); g.connect(filter);
+      [-9, 0, 9].forEach((d) => {
+        const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
+        o.connect(g); o.start(t); o.stop(t + dur + 0.2);
+      });
+    }
+    // deep bass with a sub-octave for weight
+    function bass(freq, t, dur, vel) {
+      const g = ac.createGain(); env(g, t, 0.5, dur, vel); g.connect(filter);
+      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
+      const s = ac.createOscillator(); s.type = "sine"; s.frequency.value = freq / 2;
+      o.connect(g); s.connect(g); o.start(t); s.start(t); o.stop(t + dur + 0.2); s.stop(t + dur + 0.2);
+    }
+    // stately melodic voice
+    function mel(freq, t, dur, vel) {
+      const g = ac.createGain(); env(g, t, 0.1, dur, vel); g.connect(filter);
+      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
       const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq * 2; o2.detune.value = 5;
+      o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+    }
+    // soft low timpani swell on the downbeat for grandeur
+    function boom(t) {
       const g = ac.createGain();
       g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(vel, t + 0.05);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(g); o2.connect(g); g.connect(filter);
-      o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+      g.gain.linearRampToValueAtTime(0.5, t + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+      g.connect(master);
+      const o = ac.createOscillator(); o.type = "sine";
+      o.frequency.setValueAtTime(72, t); o.frequency.exponentialRampToValueAtTime(44, t + 0.5);
+      o.connect(g); o.start(t); o.stop(t + 1.4);
     }
 
     function schedule() {
-      while (nextTime < ac.currentTime + 0.25) {
-        const chord = prog[(step >> 2) % prog.length];
-        const b = step & 3;
-        if (b === 0) chord.forEach((m) => voice(mtof(m), nextTime, beat * 4.2, 0.05, "sine")); // pad
-        if (Math.random() > 0.18) {                                  // arpeggio (with rests)
-          const m = chord[b % chord.length] + 12 + (Math.random() < 0.25 ? 12 : 0);
-          voice(mtof(m), nextTime, beat * 1.8, 0.085, "triangle");
+      while (nextTime < ac.currentTime + 0.3) {
+        const bar = bars[((step / BPB) | 0) % bars.length];
+        const b = step % BPB;
+        const barDur = beat * BPB;
+        if (b === 0) {
+          bass(mtof(bar.bass - 12), nextTime, barDur * 1.05, 0.18);
+          bar.tones.forEach((m) => {
+            pad(mtof(m), nextTime, barDur * 1.05, 0.045);
+            pad(mtof(m + 12), nextTime, barDur * 1.05, 0.026); // octave shimmer
+          });
+          boom(nextTime);
+        }
+        // sparse, stately melody on beats 0 and 2
+        if ((b === 0 || b === 2) && Math.random() > 0.25) {
+          mel(mtof(bar.tones[b === 0 ? 2 : 1] + 12), nextTime, beat * 2.2, 0.08);
         }
         step++;
         nextTime += beat;
@@ -597,18 +640,18 @@
     function play() {
       if (!ac) build();
       if (ac.state === "suspended") ac.resume();
-      if (!timer) { nextTime = ac.currentTime + 0.1; timer = setInterval(schedule, 50); }
+      if (!timer) { nextTime = ac.currentTime + 0.15; timer = setInterval(schedule, 60); }
       playing = true;
       master.gain.cancelScheduledValues(ac.currentTime);
       master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), ac.currentTime);
-      master.gain.linearRampToValueAtTime(0.16, ac.currentTime + 2.0);
+      master.gain.linearRampToValueAtTime(0.4, ac.currentTime + 3.0); // grand swell-in
     }
 
     function mute() {
       if (!ac) return;
       master.gain.cancelScheduledValues(ac.currentTime);
       master.gain.setValueAtTime(master.gain.value, ac.currentTime);
-      master.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.6);
+      master.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.7);
       if (timer) { clearInterval(timer); timer = null; }
       playing = false;
     }
