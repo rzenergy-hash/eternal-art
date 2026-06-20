@@ -693,20 +693,66 @@
     };
   })();
 
+  // ---- background track ---------------------------------------------------
+  // If a real recording file "the-swan.mp3" sits next to index.html, play THAT
+  // (sounds exactly like the recording). Otherwise fall back to the synth.
+  const VOL = 0.85;
+  const swanFile = new Audio("the-swan.mp3");
+  swanFile.loop = true; swanFile.preload = "auto"; swanFile.volume = 0;
+  let fileReady = false;
+  swanFile.addEventListener("canplaythrough", () => { fileReady = true; });
+  swanFile.addEventListener("error", () => { fileReady = false; });
+
+  let fileFade = null;
+  function fadeFile(target, done) {
+    clearInterval(fileFade);
+    fileFade = setInterval(() => {
+      const v = swanFile.volume;
+      if (Math.abs(target - v) <= 0.04) {
+        swanFile.volume = Math.max(0, Math.min(1, target));
+        clearInterval(fileFade);
+        if (done) done();
+      } else {
+        swanFile.volume = Math.max(0, Math.min(1, v + (target > v ? 0.04 : -0.04)));
+      }
+    }, 70);
+  }
+
+  // controller that prefers the recording, else the synth
+  const track = {
+    playing: false,
+    play() {
+      this.playing = true;
+      if (fileReady) {
+        swanFile.play()
+          .then(() => fadeFile(VOL))
+          .catch(() => music.play());   // autoplay/format issue → synth
+      } else {
+        music.play();
+      }
+    },
+    mute() {
+      this.playing = false;
+      if (!swanFile.paused) fadeFile(0, () => swanFile.pause());
+      music.mute();
+    },
+    toggle() { this.playing ? this.mute() : this.play(); return this.playing; },
+  };
+
   // sound button + M key, and auto-start on the first user gesture
   const soundBtn = document.getElementById("soundToggle");
-  function reflectSound() { if (soundBtn) soundBtn.classList.toggle("muted", !music.playing); }
-  if (soundBtn) soundBtn.addEventListener("click", () => { music.toggle(); reflectSound(); });
+  function reflectSound() { if (soundBtn) soundBtn.classList.toggle("muted", !track.playing); }
+  if (soundBtn) soundBtn.addEventListener("click", () => { track.toggle(); reflectSound(); });
   window.addEventListener("keydown", (e) => {
     if ((e.key === "m" || e.key === "M") && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.preventDefault(); music.toggle(); reflectSound();
+      e.preventDefault(); track.toggle(); reflectSound();
     }
   });
   let audioKicked = false;
   function kickAudio() {
     if (audioKicked) return;
     audioKicked = true;
-    music.play(); reflectSound();
+    track.play(); reflectSound();
   }
   ["pointerdown", "keydown", "touchstart"].forEach((ev) =>
     window.addEventListener(ev, kickAudio));
