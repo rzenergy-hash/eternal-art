@@ -32,7 +32,7 @@
     cursorRadius: 100, // px — reach of the breaking field
     density: 50,       // 1..100 — fragment & dust quantity per broken cell
     spread: 55,        // 10..100 — explosion force / travel / turbulence
-    restoration: 28,   // 1..100 — heal speed (low = long delay + slow regrow)
+    restoration: 6,    // 1..100 — heal speed (low = long delay + slow regrow)
     opacity: 95,       // 10..100 — particle brightness
     particleSize: 4,   // 1..5 — fragment / dust scale
   };
@@ -236,7 +236,7 @@
     health[idx] = 0;
     // hold the empty hole before it is allowed to restore (delay)
     const t = (params.restoration - 1) / 99;
-    timer[idx] = lerp(90, 5, t);
+    timer[idx] = lerp(240, 6, t); // low restoration → wound lingers much longer
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
 
     // quantity scales with the density control
@@ -540,14 +540,14 @@
     });
   }
 
-  // ---- grand, uplifting classical music (synthesized, no external files) ----
-  // A bright, heroic C–G–Am–F (I–V–vi–IV) anthem: a pulsing deep bass for drive,
-  // lush string pads, stirring brass stabs, a rising melody and timpani — more
-  // triumphant than mournful, a soaring counterpoint to the breaking.
+  // ---- flowing, lyrical waltz (synthesized, no external files) -------------
+  // A graceful 3/4 classical waltz: a deep "oom" bass + soft "pah-pah" chords,
+  // a warm string bed, and a singing, arching melody on top — melodious and
+  // lilting, a serene counterpoint to the breaking.
   const music = (() => {
     let ac = null, master, comp, filter, delayA, fbA, delayB, fbB;
     let playing = false, timer = null, step = 0, nextTime = 0;
-    const BPM = 66, beat = 60 / BPM, BPB = 4; // beats per bar
+    const BPM = 90, beat = 60 / BPM, BPB = 3; // 3/4 waltz
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
     // each bar: a deep bass note + mid chord tones (octaves added in code)
     const bars = [
@@ -556,6 +556,13 @@
       { bass: 45, tones: [57, 60, 64] }, // Am  (vi)
       { bass: 41, tones: [53, 57, 60] }, // F   (IV)
     ];
+    // singing melody, one note per beat over the 4-bar / 12-beat phrase
+    const melody = [
+      72, 76, 79,   // C : rise C-E-G
+      81, 79, 74,   // G : peak then fall
+      76, 72, 69,   // Am: gentle descent
+      72, 77, 79,   // F : lift back toward the top
+    ];
 
     function build() {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -563,7 +570,7 @@
       master = ac.createGain(); master.gain.value = 0.0001;
       comp = ac.createDynamicsCompressor();                  // glue + prevent clipping
       filter = ac.createBiquadFilter();
-      filter.type = "lowpass"; filter.frequency.value = 3400; filter.Q.value = 0.6;
+      filter.type = "lowpass"; filter.frequency.value = 2900; filter.Q.value = 0.6;
       // two delay taps → a big, slow concert-hall reverberation
       delayA = ac.createDelay(2); delayA.delayTime.value = 0.45; fbA = ac.createGain(); fbA.gain.value = 0.42;
       delayB = ac.createDelay(2); delayB.delayTime.value = 0.73; fbB = ac.createGain(); fbB.gain.value = 0.34;
@@ -603,52 +610,33 @@
       const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq * 2; o2.detune.value = 5;
       o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
     }
-    // bright brass stab — stirring, heroic punch
-    function brass(freq, t, dur, vel) {
+    // soft waltz "pah" — a gentle plucked mid chord
+    function pluck(freq, t, dur, vel) {
       const g = ac.createGain();
       g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(vel, t + 0.05);
+      g.gain.linearRampToValueAtTime(vel, t + 0.03);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
       g.connect(filter);
-      const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq;
-      const o2 = ac.createOscillator(); o2.type = "sawtooth"; o2.frequency.value = freq; o2.detune.value = 8;
-      o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
-    }
-    // soft low timpani swell on the downbeat for grandeur
-    function boom(t) {
-      const g = ac.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(0.5, t + 0.04);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
-      g.connect(master);
-      const o = ac.createOscillator(); o.type = "sine";
-      o.frequency.setValueAtTime(72, t); o.frequency.exponentialRampToValueAtTime(44, t + 0.5);
-      o.connect(g); o.start(t); o.stop(t + 1.4);
+      const o = ac.createOscillator(); o.type = "triangle"; o.frequency.value = freq;
+      o.connect(g); o.start(t); o.stop(t + dur + 0.1);
     }
 
     function schedule() {
       while (nextTime < ac.currentTime + 0.3) {
         const bar = bars[((step / BPB) | 0) % bars.length];
-        const b = step % BPB;
+        const b = step % BPB;       // 0 = downbeat, 1 & 2 = off-beats
         const barDur = beat * BPB;
-        // pulsing deep bass on every beat → momentum & grandeur
-        bass(mtof(bar.bass - 12), nextTime, beat * 0.95, 0.16);
         if (b === 0) {
-          // sustained string bed for the whole bar
-          bar.tones.forEach((m) => {
-            pad(mtof(m), nextTime, barDur * 1.02, 0.04);
-            pad(mtof(m + 12), nextTime, barDur * 1.02, 0.024); // octave shimmer
-          });
-          boom(nextTime);
+          // "oom" — deep bass + a warm sustained string bed for the whole bar
+          bass(mtof(bar.bass - 12), nextTime, beat * 1.15, 0.16);
+          bar.tones.forEach((m) => pad(mtof(m), nextTime, barDur * 1.02, 0.028));
+        } else {
+          // "pah pah" — soft mid chord on the off-beats
+          bar.tones.forEach((m) => pluck(mtof(m), nextTime, beat * 0.9, 0.04));
         }
-        // stirring brass stabs on beats 0 & 2
-        if (b === 0 || b === 2) {
-          bar.tones.forEach((m) => brass(mtof(m + 12), nextTime, beat * 1.4, 0.045));
-        }
-        // rising heroic melody, up the octave
-        if (b === 0 || b === 2) {
-          mel(mtof(bar.tones[2] + 12), nextTime, beat * 1.8, 0.09);
-        }
+        // singing, legato melody — one note per beat, slight overlap
+        const mn = melody[step % melody.length];
+        if (mn) mel(mtof(mn), nextTime, beat * 1.3, 0.12);
         step++;
         nextTime += beat;
       }
@@ -661,7 +649,7 @@
       playing = true;
       master.gain.cancelScheduledValues(ac.currentTime);
       master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), ac.currentTime);
-      master.gain.linearRampToValueAtTime(0.4, ac.currentTime + 3.0); // grand swell-in
+      master.gain.linearRampToValueAtTime(0.32, ac.currentTime + 3.0); // gentle swell-in
     }
 
     function mute() {
