@@ -30,7 +30,7 @@
   // ---- adjustable parameters ----------------------------------------------
   const params = {
     cursorRadius: 100, // px — reach of the breaking field
-    density: 85,       // 1..100 — fragment & dust quantity per broken cell
+    density: 50,       // 1..100 — fragment & dust quantity per broken cell
     spread: 55,        // 10..100 — explosion force / travel / turbulence
     restoration: 65,   // 1..100 — heal speed (low = long delay + slow regrow)
     opacity: 95,       // 10..100 — particle brightness
@@ -134,7 +134,7 @@
     basePixels = tctx.getImageData(0, 0, baseW, baseH).data;
 
     // breakable grid
-    cellPx = Math.max(10, Math.round(16 * dpr));
+    cellPx = Math.max(12, Math.round(22 * dpr));
     cols = Math.ceil(W / cellPx);
     rows = Math.ceil(H / cellPx);
     health = new Float32Array(cols * rows).fill(1);
@@ -266,13 +266,13 @@
     for (let i = 0; i < nLarge; i++) {
       const [vx, vy] = vel(0.55, force * 0.3);
       spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy,
-        cellPx * rand(0.55, 0.95) * sizeK, "large", col);
+        cellPx * rand(0.95, 1.6) * sizeK, "large", col);
     }
     // small fragments scatter faster
     for (let i = 0; i < nSmall; i++) {
       const [vx, vy] = vel(1.0, force * 0.5);
       spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy,
-        cellPx * rand(0.22, 0.42) * sizeK, "small", col);
+        cellPx * rand(0.4, 0.7) * sizeK, "small", col);
     }
     // fine dust
     for (let i = 0; i < nDust; i++) {
