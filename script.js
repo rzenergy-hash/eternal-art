@@ -43,13 +43,12 @@
   const ctx = canvas.getContext("2d");
   const loader = document.getElementById("loader");
 
-  // ---- offscreen layers ---------------------------------------------------
+  // ---- offscreen layer ----------------------------------------------------
+  // Only the pristine statue is kept offscreen (drawn once per resize). Holes
+  // are punched straight onto the screen each frame, so there is just one
+  // full-screen blit per frame instead of three.
   const baseCanvas = document.createElement("canvas");   // pristine statue
   const baseCtx = baseCanvas.getContext("2d");
-  const erodeCanvas = document.createElement("canvas");  // wound mask
-  const erodeCtx = erodeCanvas.getContext("2d");
-  const compCanvas = document.createElement("canvas");   // base minus wounds
-  const compCtx = compCanvas.getContext("2d");
 
   // ---- state --------------------------------------------------------------
   let W = 0, H = 0, dpr = 1;
@@ -105,14 +104,19 @@
   // ---- (re)build on resize ------------------------------------------------
   function setup() {
     if (!sourceImg) return;
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cssW = window.innerWidth, cssH = window.innerHeight;
+    // Render scale: start from the device pixel ratio, but cap the total buffer
+    // area so large windows stay smooth (doubling width would otherwise 4x the
+    // per-frame pixel cost). Coordinates all use `dpr`, so capping it is safe.
+    let rscale = Math.min(window.devicePixelRatio || 1, 2);
+    const MAX_AREA = 2_500_000; // ~1920x1300 worth of pixels
+    const area = cssW * cssH * rscale * rscale;
+    if (area > MAX_AREA) rscale = Math.max(0.75, rscale * Math.sqrt(MAX_AREA / area));
+    dpr = rscale;
     W = Math.floor(cssW * dpr);
     H = Math.floor(cssH * dpr);
 
-    [canvas, baseCanvas, erodeCanvas, compCanvas].forEach((c) => {
-      c.width = W; c.height = H;
-    });
+    [canvas, baseCanvas].forEach((c) => { c.width = W; c.height = H; });
     canvas.style.width = cssW + "px";
     canvas.style.height = cssH + "px";
 
@@ -145,7 +149,6 @@
       }
     }
 
-    erodeCtx.clearRect(0, 0, W, H);
     frags.length = 0;
     dust.length = 0;
   }
@@ -186,27 +189,6 @@
   function cellNoise(idx, i) {
     const s = Math.sin(idx * 12.9898 + i * 78.233) * 43758.5453;
     return s - Math.floor(s);
-  }
-
-  // carve a thin branching crack line into the wound mask (stage 1)
-  function carveCrack(x, y, len) {
-    erodeCtx.strokeStyle = "rgba(255,255,255,0.85)";
-    erodeCtx.lineWidth = Math.max(1, dpr * 0.7);
-    erodeCtx.lineCap = "round";
-    const branches = 1 + (Math.random() * 2 | 0);
-    for (let b = 0; b < branches; b++) {
-      let a = Math.random() * Math.PI * 2, px = x, py = y;
-      erodeCtx.beginPath();
-      erodeCtx.moveTo(px, py);
-      const seg = 3 + (Math.random() * 3 | 0);
-      for (let i = 0; i < seg; i++) {
-        a += rand(-0.85, 0.85);
-        const sl = len / seg;
-        px += Math.cos(a) * sl; py += Math.sin(a) * sl;
-        erodeCtx.lineTo(px, py);
-      }
-      erodeCtx.stroke();
-    }
   }
 
   // ---- spawning -----------------------------------------------------------
@@ -256,15 +238,6 @@
     const t = (params.restoration - 1) / 99;
     timer[idx] = lerp(120, 10, t);
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
-
-    // stage 1: irregular crack lines run through the surface before it parts
-    if (Math.random() < 0.45) {
-      const nc = 1 + (Math.random() * 2 | 0);
-      for (let k = 0; k < nc; k++) {
-        carveCrack(cx + rand(-cellPx, cellPx) * 0.4, cy + rand(-cellPx, cellPx) * 0.4,
-          cellPx * rand(1.4, 3.2));
-      }
-    }
 
     // quantity scales with the density control
     const q = lerp(0.4, 1, (params.density - 1) / 99);
@@ -364,12 +337,15 @@
     }
     damaged.length = w;
 
-    // --- paint the wound mask from the damaged cells ---
-    // Each broken cell is a jagged, irregular polygon (stable per cell) so the
-    // void reads as broken stone with a torn edge — not a grid of circles.
-    // Neighbouring cells overlap into one continuous organic hole.
-    erodeCtx.clearRect(0, 0, W, H);
-    erodeCtx.fillStyle = "#ffffff";
+    // --- draw the sculpture, then punch the holes directly onto the screen ---
+    // One full-screen blit (the base), then a small black jagged polygon per
+    // damaged cell (alpha = how broken it is). Far cheaper than compositing
+    // separate mask/comp layers every frame, especially on large windows.
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(baseCanvas, 0, 0);
+
+    ctx.fillStyle = "#050506";
     const nv = 9;
     for (let i = 0; i < damaged.length; i++) {
       const idx = damaged[i];
@@ -378,32 +354,18 @@
       const c = idx % cols, r = (idx / cols) | 0;
       const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
       const baseR = cellPx * 1.05;
-      erodeCtx.globalAlpha = a;
-      erodeCtx.beginPath();
+      ctx.globalAlpha = a;
+      ctx.beginPath();
       for (let k = 0; k < nv; k++) {
         const ang = (k / nv) * Math.PI * 2 + cellNoise(idx, k + 20) * 0.6;
         const rr = baseR * (0.5 + cellNoise(idx, k) * 0.9);
         const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
-        if (k === 0) erodeCtx.moveTo(x, y); else erodeCtx.lineTo(x, y);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      erodeCtx.closePath();
-      erodeCtx.fill();
+      ctx.closePath();
+      ctx.fill();
     }
-    erodeCtx.globalAlpha = 1;
-
-    // --- composite the sculpture minus its wounds ---
-    compCtx.globalCompositeOperation = "source-over";
-    compCtx.clearRect(0, 0, W, H);
-    compCtx.drawImage(baseCanvas, 0, 0);
-    compCtx.globalCompositeOperation = "destination-out";
-    compCtx.drawImage(erodeCanvas, 0, 0);
-    compCtx.globalCompositeOperation = "source-over";
-
-    // --- to screen: black void first so holes show only the background ---
-    ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "#050506";
-    ctx.fillRect(0, 0, W, H);
-    ctx.drawImage(compCanvas, 0, 0);
+    ctx.globalAlpha = 1;
 
     // --- update + draw textured fragments (large & small) ---
     for (let i = frags.length - 1; i >= 0; i--) {
