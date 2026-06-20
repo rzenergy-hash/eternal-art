@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Eternal</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Soft atmospheric glow lives behind the canvas (CSS), so the canvas
+       itself can stay transparent and only paint the dust particles. -->
+  <div class="atmosphere"></div>
+
+  <!-- The artwork. Particles are drawn here every frame. -->
+  <canvas id="scene"></canvas>
+
+  <!-- Adjustable parameters. Collapsible so it never intrudes on the piece. -->
+  <aside id="panel" class="panel collapsed">
+    <button id="panelToggle" class="panel__toggle" aria-label="Toggle controls">✦</button>
+    <div class="panel__body">
+      <h2>Eternal · controls</h2>
+
+      <label>Cursor radius
+        <input type="range" id="cursorRadius" min="40" max="400" step="5" value="150" />
+        <span class="val" data-for="cursorRadius"></span>
+      </label>
+
+      <label>Particle density
+        <input type="range" id="density" min="1" max="100" step="1" value="85" />
+        <span class="val" data-for="density"></span>
+      </label>
+
+      <label>Particle spread
+        <input type="range" id="spread" min="10" max="100" step="1" value="45" />
+        <span class="val" data-for="spread"></span>
+      </label>
+
+      <label>Restoration speed
+        <input type="range" id="restoration" min="1" max="100" step="1" value="45" />
+        <span class="val" data-for="restoration"></span>
+      </label>
+
+      <label>Particle opacity
+        <input type="range" id="opacity" min="10" max="100" step="1" value="92" />
+        <span class="val" data-for="opacity"></span>
+      </label>
+
+      <label>Particle size
+        <input type="range" id="particleSize" min="1" max="5" step="1" value="3" />
+        <span class="val" data-for="particleSize"></span>
+      </label>
+
+      <button id="resetBtn" class="panel__reset">reset to defaults</button>
+    </div>
+  </aside>
+
+  <!-- Shown until the image is decoded and the particle field is built. -->
+  <div id="loader" class="loader"><span>summoning the dust…</span></div>
+
+  <script src="script.js"></script>
+</body>
+</html>

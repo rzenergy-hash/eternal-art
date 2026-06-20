@@ -1,0 +1,221 @@
+/* ===========================================================================
+   Eternal — interactive disintegration artwork
+   =========================================================================== */
+
+:root {
+  --bg: #050506;          /* near-black backdrop                       */
+  --glow: #1c1b24;        /* faint cool glow behind the bust          */
+  --ink: rgba(235, 230, 222, 0.85);
+  --ink-dim: rgba(235, 230, 222, 0.4);
+  --panel-bg: rgba(12, 12, 14, 0.72);
+  --panel-border: rgba(235, 230, 222, 0.12);
+  --accent: #d8cfc2;      /* warm off-white marble tone               */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+  font-family: "Cormorant Garamond", "Georgia", "Times New Roman", serif;
+  /* don't let touch gestures scroll/zoom while painting dust */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* --- atmospheric glow ----------------------------------------------------- */
+/* A soft radial light behind the figure recreates the photo's vignette so the
+   transparent canvas has something luminous to sit on. */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(60% 70% at 50% 42%, var(--glow) 0%, rgba(10, 10, 12, 0.6) 45%, var(--bg) 78%),
+    var(--bg);
+  pointer-events: none;
+}
+
+/* --- canvas --------------------------------------------------------------- */
+#scene {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+/* --- caption -------------------------------------------------------------- */
+.caption {
+  position: fixed;
+  left: clamp(20px, 4vw, 56px);
+  bottom: clamp(18px, 4vh, 48px);
+  z-index: 3;
+  pointer-events: none;
+  user-select: none;
+  animation: rise 2.4s ease both;
+}
+.caption h1 {
+  margin: 0;
+  font-size: clamp(34px, 6vw, 72px);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 2px 40px rgba(0, 0, 0, 0.8);
+}
+.caption p {
+  margin: 0.35em 0 0;
+  font-size: clamp(12px, 1.4vw, 16px);
+  letter-spacing: 0.22em;
+  text-transform: lowercase;
+  color: var(--ink-dim);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* --- control panel -------------------------------------------------------- */
+.panel {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 4;
+  width: 268px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.45s ease;
+}
+.panel.collapsed {
+  transform: translateX(calc(100% + 18px));
+  opacity: 0.0;
+}
+
+.panel__toggle {
+  position: absolute;
+  top: 0;
+  left: -52px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--accent);
+  font-size: 16px;
+  cursor: pointer;
+  transition: transform 0.4s ease, color 0.3s ease;
+}
+.panel__toggle:hover { color: #fff; transform: rotate(90deg); }
+
+.panel__body { padding: 18px 18px 16px; }
+.panel__body h2 {
+  margin: 0 0 14px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.panel label {
+  display: block;
+  margin: 0 0 13px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  position: relative;
+}
+.panel .val {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+/* slider styling */
+.panel input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  margin: 9px 0 0;
+  border-radius: 3px;
+  background: rgba(235, 230, 222, 0.18);
+  outline: none;
+}
+.panel input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 0 4px rgba(216, 207, 194, 0.12);
+  transition: transform 0.15s ease;
+}
+.panel input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.panel input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.panel__reset {
+  margin-top: 4px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.25s ease, border-color 0.25s ease;
+}
+.panel__reset:hover { color: var(--ink); border-color: var(--ink-dim); }
+
+/* --- loader --------------------------------------------------------------- */
+.loader {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--ink-dim);
+  letter-spacing: 0.3em;
+  text-transform: lowercase;
+  font-size: 14px;
+  transition: opacity 0.8s ease;
+}
+.loader span { animation: pulse 1.8s ease-in-out infinite; }
+.loader.hidden { opacity: 0; pointer-events: none; }
+
+@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+
+@media (max-width: 640px) {
+  .panel { width: 240px; }
+}
