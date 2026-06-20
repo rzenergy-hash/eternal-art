@@ -32,7 +32,7 @@
     cursorRadius: 100, // px — reach of the breaking field
     density: 50,       // 1..100 — fragment & dust quantity per broken cell
     spread: 55,        // 10..100 — explosion force / travel / turbulence
-    restoration: 65,   // 1..100 — heal speed (low = long delay + slow regrow)
+    restoration: 28,   // 1..100 — heal speed (low = long delay + slow regrow)
     opacity: 95,       // 10..100 — particle brightness
     particleSize: 4,   // 1..5 — fragment / dust scale
   };
@@ -540,21 +540,21 @@
     });
   }
 
-  // ---- grand classical music (fully synthesized, no external files) --------
-  // A slow, majestic Am–F–C–E (harmonic-minor cadence) with a deep bass, lush
-  // detuned string-ensemble pads with octave doublings, a soft timpani swell,
-  // and a large hall reverb — a sweeping counterpoint to the breaking.
+  // ---- grand, uplifting classical music (synthesized, no external files) ----
+  // A bright, heroic C–G–Am–F (I–V–vi–IV) anthem: a pulsing deep bass for drive,
+  // lush string pads, stirring brass stabs, a rising melody and timpani — more
+  // triumphant than mournful, a soaring counterpoint to the breaking.
   const music = (() => {
     let ac = null, master, comp, filter, delayA, fbA, delayB, fbB;
     let playing = false, timer = null, step = 0, nextTime = 0;
-    const BPM = 50, beat = 60 / BPM, BPB = 4; // beats per bar
+    const BPM = 66, beat = 60 / BPM, BPB = 4; // beats per bar
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
     // each bar: a deep bass note + mid chord tones (octaves added in code)
     const bars = [
-      { bass: 45, tones: [57, 60, 64] }, // Am
-      { bass: 41, tones: [57, 60, 65] }, // F
-      { bass: 48, tones: [60, 64, 67] }, // C
-      { bass: 40, tones: [56, 59, 64] }, // E (major — dramatic cadence)
+      { bass: 48, tones: [60, 64, 67] }, // C   (I)
+      { bass: 43, tones: [55, 59, 62] }, // G   (V)
+      { bass: 45, tones: [57, 60, 64] }, // Am  (vi)
+      { bass: 41, tones: [53, 57, 60] }, // F   (IV)
     ];
 
     function build() {
@@ -563,7 +563,7 @@
       master = ac.createGain(); master.gain.value = 0.0001;
       comp = ac.createDynamicsCompressor();                  // glue + prevent clipping
       filter = ac.createBiquadFilter();
-      filter.type = "lowpass"; filter.frequency.value = 2000; filter.Q.value = 0.6;
+      filter.type = "lowpass"; filter.frequency.value = 3400; filter.Q.value = 0.6;
       // two delay taps → a big, slow concert-hall reverberation
       delayA = ac.createDelay(2); delayA.delayTime.value = 0.45; fbA = ac.createGain(); fbA.gain.value = 0.42;
       delayB = ac.createDelay(2); delayB.delayTime.value = 0.73; fbB = ac.createGain(); fbB.gain.value = 0.34;
@@ -603,6 +603,17 @@
       const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq * 2; o2.detune.value = 5;
       o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
     }
+    // bright brass stab — stirring, heroic punch
+    function brass(freq, t, dur, vel) {
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vel, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      g.connect(filter);
+      const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = freq;
+      const o2 = ac.createOscillator(); o2.type = "sawtooth"; o2.frequency.value = freq; o2.detune.value = 8;
+      o.connect(g); o2.connect(g); o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+    }
     // soft low timpani swell on the downbeat for grandeur
     function boom(t) {
       const g = ac.createGain();
@@ -620,17 +631,23 @@
         const bar = bars[((step / BPB) | 0) % bars.length];
         const b = step % BPB;
         const barDur = beat * BPB;
+        // pulsing deep bass on every beat → momentum & grandeur
+        bass(mtof(bar.bass - 12), nextTime, beat * 0.95, 0.16);
         if (b === 0) {
-          bass(mtof(bar.bass - 12), nextTime, barDur * 1.05, 0.18);
+          // sustained string bed for the whole bar
           bar.tones.forEach((m) => {
-            pad(mtof(m), nextTime, barDur * 1.05, 0.045);
-            pad(mtof(m + 12), nextTime, barDur * 1.05, 0.026); // octave shimmer
+            pad(mtof(m), nextTime, barDur * 1.02, 0.04);
+            pad(mtof(m + 12), nextTime, barDur * 1.02, 0.024); // octave shimmer
           });
           boom(nextTime);
         }
-        // sparse, stately melody on beats 0 and 2
-        if ((b === 0 || b === 2) && Math.random() > 0.25) {
-          mel(mtof(bar.tones[b === 0 ? 2 : 1] + 12), nextTime, beat * 2.2, 0.08);
+        // stirring brass stabs on beats 0 & 2
+        if (b === 0 || b === 2) {
+          bar.tones.forEach((m) => brass(mtof(m + 12), nextTime, beat * 1.4, 0.045));
+        }
+        // rising heroic melody, up the octave
+        if (b === 0 || b === 2) {
+          mel(mtof(bar.tones[2] + 12), nextTime, beat * 1.8, 0.09);
         }
         step++;
         nextTime += beat;
