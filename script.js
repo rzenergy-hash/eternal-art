@@ -74,8 +74,9 @@
   };
 
   // ---- particle pools (swap-remove for O(1) deletion) ---------------------
-  const MAX_FRAG = 3000;   // textured large + small stone shards (clipped)
-  const MAX_DUST = 36000;  // fine specks
+  const MAX_FRAG = 3000;     // destruction stone shards
+  const MAX_DUST = 36000;    // fine specks
+  const MAX_REBUILD = 9000;  // returning pieces during reconstruction
   const frags = [];
   const dust = [];
 
@@ -241,33 +242,45 @@
     const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
     const col = sampleColor(cx, cy) || [210, 205, 196];
     const tt = (params.restoration - 1) / 99;
-    const u = lerp(0.55, 0.13, tt);   // stage time-unit (slower at low restoration)
+    const u = lerp(0.6, 0.14, tt);    // stage time-unit (slower at low restoration)
     const fillOf = () => {
       const s = rand(0.8, 1.12);
       return `rgb(${clamp(col[0] * s | 0, 0, 255)},${clamp(col[1] * s | 0, 0, 255)},${clamp(col[2] * s | 0, 0, 255)})`;
     };
+    // Each piece appears far out, then drifts home along a CURVE with inertia
+    // (tangential launch velocity + a spring pull) — destruction run backwards.
     const emit = (kind, delay, dur, size, dist, finisher) => {
+      if (rebuild.length >= MAX_REBUILD) return;
       const ang = Math.random() * Math.PI * 2;
+      const tx = -Math.sin(ang), ty = Math.cos(ang);   // tangent → arc
+      const spin = (Math.random() < 0.5 ? -1 : 1) * rand(0.7, 1.8) * dpr;
+      const inw = rand(0.1, 0.7) * dpr;                 // slight inward drift
       rebuild.push({
-        kind, finisher,
-        sx: cx + Math.cos(ang) * dist, sy: cy + Math.sin(ang) * dist, cx, cy,
+        x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist,
+        vx: tx * spin - Math.cos(ang) * inw, vy: ty * spin - Math.sin(ang) * inw,
+        cx, cy, kind, finisher,
         poly: kind === "frag" ? makeShard() : null, ss: size,
-        rot: Math.random() * Math.PI * 2, vrot: rand(-0.06, 0.06),
+        rot: Math.random() * 6.283, vrot: rand(-0.13, 0.13),
         fill: fillOf(), t0: time + delay, dur, idx, g: cgen[idx],
       });
     };
-    // reverse of destruction: DUST first → then small CHIPS → then the LARGE piece
-    const nd = irand(5, 9);
+    // reverse of destruction, with LOTS of pieces:
+    // dust (many) → small chips → medium fragments → the large piece settles
+    const nd = irand(14, 22);
     for (let i = 0; i < nd; i++)
-      emit("dust", rand(0, u * 0.8), u * 1.6 * rand(0.8, 1.2),
-        Math.max(1, params.particleSize - 1), rand(55, 130) * dpr * 0.55, false);
-    const ns = irand(2, 4);
+      emit("dust", rand(0, u * 1.0), u * 2.0 * rand(0.8, 1.3),
+        Math.max(1, params.particleSize - 1), rand(120, 320) * dpr * 0.5, false);
+    const ns = irand(6, 10);
     for (let i = 0; i < ns; i++)
-      emit("frag", u * 1.2 + rand(0, u * 0.6), u * 1.7 * rand(0.8, 1.2),
-        cellPx * rand(0.32, 0.55), rand(35, 90) * dpr * 0.55, false);
+      emit("frag", u * 1.0 + rand(0, u * 0.8), u * 2.0 * rand(0.8, 1.2),
+        cellPx * rand(0.26, 0.48), rand(90, 210) * dpr * 0.5, false);
+    const nm = irand(2, 4);
+    for (let i = 0; i < nm; i++)
+      emit("frag", u * 1.8 + rand(0, u * 0.6), u * 2.1 * rand(0.85, 1.15),
+        cellPx * rand(0.55, 0.85), rand(70, 150) * dpr * 0.5, false);
     // the large piece arrives last and settles the cell back to solid marble
-    emit("frag", u * 2.6 + rand(0, u * 0.5), u * 2.0 * rand(0.9, 1.1),
-      cellPx * rand(1.0, 1.4), rand(25, 65) * dpr * 0.55, true);
+    emit("frag", u * 2.9 + rand(0, u * 0.5), u * 2.3 * rand(0.9, 1.1),
+      cellPx * rand(1.0, 1.45), rand(50, 120) * dpr * 0.5, true);
   }
 
   /* Fracture one cell: clear it from the sculpture and throw its matter out. */
@@ -484,31 +497,34 @@
       let p = (time - f.t0) / f.dur;
       if (p < 0) continue;                          // this stage hasn't begun yet
       if (p > 1) p = 1;
-      const e = 1 - Math.pow(1 - p, 3);             // ease-out homing
-      const x = f.sx + (f.cx - f.sx) * e;
-      const y = f.sy + (f.cy - f.sy) * e;
-      f.rot += f.vrot * (1 - p);
+      // physics: a spring pulls toward home, damped — combined with the launch
+      // velocity this traces a decelerating CURVE with inertia (rewind motion).
+      const k = lerp(0.012, 0.07, p);               // tighten the pull as it nears
+      f.vx = (f.vx + (f.cx - f.x) * k) * 0.9;
+      f.vy = (f.vy + (f.cy - f.y) * k) * 0.9;
+      f.x += f.vx; f.y += f.vy;
+      f.rot += f.vrot; f.vrot *= 0.985;
       if (p >= 1) {
         if (f.finisher && cgen[f.idx] === f.g) health[f.idx] = 1; // large piece lands → intact
         rebuild[i] = rebuild[rebuild.length - 1]; rebuild.pop();
         continue;
       }
       // finisher fades in & stays; dust/chips fade in then out as they merge inward
-      const a = (f.finisher ? clamp(e * 1.6, 0, 1)
+      const a = (f.finisher ? clamp(p * 1.8, 0, 1)
                             : (p < 0.7 ? p / 0.7 : Math.max(0, (1 - p) / 0.3))) * gOpacity;
       if (a <= 0.01) continue;
       ctx.globalAlpha = a;
       ctx.fillStyle = f.fill;
       if (f.kind === "dust") {
-        ctx.fillRect(x | 0, y | 0, f.ss, f.ss);      // a converging mote
+        ctx.fillRect(f.x | 0, f.y | 0, f.ss, f.ss);  // a converging mote
       } else {
-        const half = f.ss * (0.25 + 0.75 * e) * 0.5; // grows from speck to piece
+        const half = f.ss * (0.3 + 0.7 * Math.min(1, p * 1.3)) * 0.5; // grows in
         const poly = f.poly, co = Math.cos(f.rot), si = Math.sin(f.rot);
         ctx.beginPath();
-        for (let k = 0; k < poly.length; k++) {
-          const lx = poly[k][0] * half, ly = poly[k][1] * half;
-          const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
-          if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        for (let kk = 0; kk < poly.length; kk++) {
+          const lx = poly[kk][0] * half, ly = poly[kk][1] * half;
+          const px = f.x + lx * co - ly * si, py = f.y + lx * si + ly * co;
+          if (kk === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         }
         ctx.closePath();
         ctx.fill();
