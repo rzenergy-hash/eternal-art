@@ -32,7 +32,7 @@
     cursorRadius: 100, // px — reach of the breaking field
     density: 50,       // 1..100 — fragment & dust quantity per broken cell
     spread: 55,        // 10..100 — explosion force / travel / turbulence
-    restoration: 6,    // 1..100 — heal speed (low = long delay + slow regrow)
+    restoration: 4,    // 1..100 — heal speed (low = long delay + slow regrow)
     opacity: 95,       // 10..100 — particle brightness
     particleSize: 4,   // 1..5 — fragment / dust scale
   };
@@ -236,7 +236,7 @@
     health[idx] = 0;
     // hold the empty hole before it is allowed to restore (delay)
     const t = (params.restoration - 1) / 99;
-    timer[idx] = lerp(360, 6, t); // low restoration → wound lingers much longer
+    timer[idx] = lerp(520, 6, t); // low restoration → wound lingers much longer
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
 
     // quantity scales with the density control
@@ -289,7 +289,7 @@
     time += 0.016;
     const radius = params.cursorRadius * dpr;
     const t = (params.restoration - 1) / 99;
-    const restoreRate = lerp(0.006, 0.07, t); // regrow speed
+    const restoreRate = lerp(0.003, 0.07, t); // regrow speed
     const gOpacity = params.opacity / 100;
     const fdrag = 0.965, sdrag = 0.955, ddrag = 0.985; // large/small/dust drag
     const turb = lerp(0.02, 0.12, (params.spread - 10) / 90) * dpr;
