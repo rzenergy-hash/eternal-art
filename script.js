@@ -59,10 +59,13 @@
   // ---- breakable grid -----------------------------------------------------
   let cellPx = 0, cols = 0, rows = 0;
   let health = null;     // Float32: 1 = intact marble, 0 = fully gone
-  let timer = null;      // Float32: frames to stay empty before regrowing
+  let restoreT = null;   // Float32: absolute time (s) this cell starts returning
+  let cstate = null;     // Uint8:  0 intact · 1 broken/holding · 2 piece in flight
+  let cgen = null;       // Uint16: generation, invalidates stale return pieces
   let onFigure = null;   // Uint8:  1 = this cell sits on the marble
   let active = null;     // Uint8:  1 = currently in the `damaged` list
   let damaged = [];      // indices of cells that are < full health
+  const rebuild = [];    // marble pieces flying back home to reassemble
 
   // ---- pointer (with velocity) --------------------------------------------
   const pointer = {
@@ -133,10 +136,13 @@
     cols = Math.ceil(W / cellPx);
     rows = Math.ceil(H / cellPx);
     health = new Float32Array(cols * rows).fill(1);
-    timer = new Float32Array(cols * rows);
+    restoreT = new Float32Array(cols * rows);
+    cstate = new Uint8Array(cols * rows);
+    cgen = new Uint16Array(cols * rows);
     onFigure = new Uint8Array(cols * rows);
     active = new Uint8Array(cols * rows);
     damaged = [];
+    rebuild.length = 0;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
@@ -228,15 +234,43 @@
     });
   }
 
+  /* Begin a cell's reconstruction: a marble piece coalesces out of the dark a
+     short way off and drifts home, settling into place when it arrives. */
+  function spawnReturn(idx) {
+    const c = idx % cols, r = (idx / cols) | 0;
+    const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
+    const col = sampleColor(cx, cy) || [210, 205, 196];
+    const ang = Math.random() * Math.PI * 2;
+    const dist = rand(35, 95) * dpr;
+    const sh = rand(0.8, 1.12);
+    const tt = (params.restoration - 1) / 99;
+    rebuild.push({
+      sx: cx + Math.cos(ang) * dist, sy: cy + Math.sin(ang) * dist, // start (offset)
+      cx, cy,                                                        // home
+      poly: makeShard(), ss: cellPx * rand(1.0, 1.4),
+      rot: Math.random() * Math.PI * 2, vrot: rand(-0.05, 0.05),
+      fill: `rgb(${clamp(col[0] * sh | 0, 0, 255)},${clamp(col[1] * sh | 0, 0, 255)},${clamp(col[2] * sh | 0, 0, 255)})`,
+      t0: time, dur: lerp(1.6, 0.5, tt) * rand(0.8, 1.2),           // calm flight
+      idx, g: cgen[idx],
+    });
+  }
+
   /* Fracture one cell: clear it from the sculpture and throw its matter out. */
   function breakCell(idx, cx, cy, force) {
     const col = sampleColor(cx, cy) || [220, 215, 205];
 
     // permanently clear this cell from the visible sculpture (mask)
     health[idx] = 0;
-    // hold the empty hole before it is allowed to restore (delay)
+    cstate[idx] = 1;        // broken / holding
+    cgen[idx]++;            // invalidate any in-flight return piece for this cell
+    // Restoration is a center-out wave seeded at the impact point (the cursor):
+    // cells nearer the seed return first, outer cells later, with timing jitter.
     const t = (params.restoration - 1) / 99;
-    timer[idx] = lerp(520, 6, t); // low restoration → wound lingers much longer
+    const hold = lerp(8.5, 0.15, t);          // s the void lingers before rebuilding
+    const wave = lerp(0.010, 0.0008, t);      // s per device-px from the seed
+    const tjit = lerp(1.4, 0.1, t);           // random per-piece timing spread
+    const seedDist = Math.hypot(cx - pointer.x, cy - pointer.y);
+    restoreT[idx] = time + hold + seedDist * wave + Math.random() * tjit;
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
 
     // quantity scales with the density control
@@ -288,8 +322,6 @@
   function frame() {
     time += 0.016;
     const radius = params.cursorRadius * dpr;
-    const t = (params.restoration - 1) / 99;
-    const restoreRate = lerp(0.003, 0.07, t); // regrow speed
     const gOpacity = params.opacity / 100;
     const fdrag = 0.965, sdrag = 0.955, ddrag = 0.985; // large/small/dust drag
     const turb = lerp(0.02, 0.12, (params.spread - 10) / 90) * dpr;
@@ -323,16 +355,16 @@
       }
     }
 
-    // --- restoration: tick timers, then slowly regrow health ---
+    // --- restoration: each cell holds, then a piece flies home to rebuild it ---
+    // (the piece itself flips health→1 on arrival; staggered by the seed wave)
     let w = 0;
     for (let i = 0; i < damaged.length; i++) {
       const idx = damaged[i];
-      if (timer[idx] > 0) {
-        timer[idx] -= 1;                       // hold the empty hole (delay)
-      } else if (health[idx] < 1) {
-        health[idx] = Math.min(1, health[idx] + restoreRate); // smooth regrow
+      if (cstate[idx] === 1 && time >= restoreT[idx]) {
+        spawnReturn(idx);       // launch the returning marble piece
+        cstate[idx] = 2;        // in flight
       }
-      if (health[idx] >= 1) { active[idx] = 0; }  // fully restored → drop
+      if (health[idx] >= 1) { active[idx] = 0; cstate[idx] = 0; } // fully restored → drop
       else { damaged[w++] = idx; }
     }
     damaged.length = w;
@@ -418,6 +450,37 @@
       const x = p.x, y = p.y;
       ctx.globalAlpha = clamp(p.life * 1.3, 0, 1) * gOpacity;
       ctx.fillStyle = p.fill;
+      ctx.beginPath();
+      for (let k = 0; k < poly.length; k++) {
+        const lx = poly[k][0] * half, ly = poly[k][1] * half;
+        const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // --- update + draw returning marble pieces (the sculpture reassembling) ---
+    // Each piece coalesces from faint/small to solid as it eases home, then
+    // settles — flipping its cell back to intact so the surface "remembers" it.
+    for (let i = rebuild.length - 1; i >= 0; i--) {
+      const f = rebuild[i];
+      let p = (time - f.t0) / f.dur; if (p > 1) p = 1;
+      const e = 1 - Math.pow(1 - p, 3);             // ease-out: drifts in, settles
+      const x = f.sx + (f.cx - f.sx) * e;
+      const y = f.sy + (f.cy - f.sy) * e;
+      f.rot += f.vrot * (1 - p);
+      if (p >= 1) {
+        if (cgen[f.idx] === f.g) health[f.idx] = 1; // piece lands → cell intact
+        rebuild[i] = rebuild[rebuild.length - 1]; rebuild.pop();
+        continue;
+      }
+      const half = f.ss * (0.25 + 0.75 * e) * 0.5;  // grows from a speck to a piece
+      const a = clamp(e * 1.5, 0, 1) * gOpacity;     // fades in as it coalesces
+      const poly = f.poly, co = Math.cos(f.rot), si = Math.sin(f.rot);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = f.fill;
       ctx.beginPath();
       for (let k = 0; k < poly.length; k++) {
         const lx = poly[k][0] * half, ly = poly[k][1] * half;
