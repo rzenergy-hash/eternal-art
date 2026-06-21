@@ -240,19 +240,34 @@
     const c = idx % cols, r = (idx / cols) | 0;
     const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
     const col = sampleColor(cx, cy) || [210, 205, 196];
-    const ang = Math.random() * Math.PI * 2;
-    const dist = rand(35, 95) * dpr;
-    const sh = rand(0.8, 1.12);
     const tt = (params.restoration - 1) / 99;
-    rebuild.push({
-      sx: cx + Math.cos(ang) * dist, sy: cy + Math.sin(ang) * dist, // start (offset)
-      cx, cy,                                                        // home
-      poly: makeShard(), ss: cellPx * rand(1.0, 1.4),
-      rot: Math.random() * Math.PI * 2, vrot: rand(-0.05, 0.05),
-      fill: `rgb(${clamp(col[0] * sh | 0, 0, 255)},${clamp(col[1] * sh | 0, 0, 255)},${clamp(col[2] * sh | 0, 0, 255)})`,
-      t0: time, dur: lerp(1.6, 0.5, tt) * rand(0.8, 1.2),           // calm flight
-      idx, g: cgen[idx],
-    });
+    const u = lerp(0.55, 0.13, tt);   // stage time-unit (slower at low restoration)
+    const fillOf = () => {
+      const s = rand(0.8, 1.12);
+      return `rgb(${clamp(col[0] * s | 0, 0, 255)},${clamp(col[1] * s | 0, 0, 255)},${clamp(col[2] * s | 0, 0, 255)})`;
+    };
+    const emit = (kind, delay, dur, size, dist, finisher) => {
+      const ang = Math.random() * Math.PI * 2;
+      rebuild.push({
+        kind, finisher,
+        sx: cx + Math.cos(ang) * dist, sy: cy + Math.sin(ang) * dist, cx, cy,
+        poly: kind === "frag" ? makeShard() : null, ss: size,
+        rot: Math.random() * Math.PI * 2, vrot: rand(-0.06, 0.06),
+        fill: fillOf(), t0: time + delay, dur, idx, g: cgen[idx],
+      });
+    };
+    // reverse of destruction: DUST first → then small CHIPS → then the LARGE piece
+    const nd = irand(5, 9);
+    for (let i = 0; i < nd; i++)
+      emit("dust", rand(0, u * 0.8), u * 1.6 * rand(0.8, 1.2),
+        Math.max(1, params.particleSize - 1), rand(55, 130) * dpr * 0.55, false);
+    const ns = irand(2, 4);
+    for (let i = 0; i < ns; i++)
+      emit("frag", u * 1.2 + rand(0, u * 0.6), u * 1.7 * rand(0.8, 1.2),
+        cellPx * rand(0.32, 0.55), rand(35, 90) * dpr * 0.55, false);
+    // the large piece arrives last and settles the cell back to solid marble
+    emit("frag", u * 2.6 + rand(0, u * 0.5), u * 2.0 * rand(0.9, 1.1),
+      cellPx * rand(1.0, 1.4), rand(25, 65) * dpr * 0.55, true);
   }
 
   /* Fracture one cell: clear it from the sculpture and throw its matter out. */
@@ -466,29 +481,38 @@
     // settles — flipping its cell back to intact so the surface "remembers" it.
     for (let i = rebuild.length - 1; i >= 0; i--) {
       const f = rebuild[i];
-      let p = (time - f.t0) / f.dur; if (p > 1) p = 1;
-      const e = 1 - Math.pow(1 - p, 3);             // ease-out: drifts in, settles
+      let p = (time - f.t0) / f.dur;
+      if (p < 0) continue;                          // this stage hasn't begun yet
+      if (p > 1) p = 1;
+      const e = 1 - Math.pow(1 - p, 3);             // ease-out homing
       const x = f.sx + (f.cx - f.sx) * e;
       const y = f.sy + (f.cy - f.sy) * e;
       f.rot += f.vrot * (1 - p);
       if (p >= 1) {
-        if (cgen[f.idx] === f.g) health[f.idx] = 1; // piece lands → cell intact
+        if (f.finisher && cgen[f.idx] === f.g) health[f.idx] = 1; // large piece lands → intact
         rebuild[i] = rebuild[rebuild.length - 1]; rebuild.pop();
         continue;
       }
-      const half = f.ss * (0.25 + 0.75 * e) * 0.5;  // grows from a speck to a piece
-      const a = clamp(e * 1.5, 0, 1) * gOpacity;     // fades in as it coalesces
-      const poly = f.poly, co = Math.cos(f.rot), si = Math.sin(f.rot);
+      // finisher fades in & stays; dust/chips fade in then out as they merge inward
+      const a = (f.finisher ? clamp(e * 1.6, 0, 1)
+                            : (p < 0.7 ? p / 0.7 : Math.max(0, (1 - p) / 0.3))) * gOpacity;
+      if (a <= 0.01) continue;
       ctx.globalAlpha = a;
       ctx.fillStyle = f.fill;
-      ctx.beginPath();
-      for (let k = 0; k < poly.length; k++) {
-        const lx = poly[k][0] * half, ly = poly[k][1] * half;
-        const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
-        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      if (f.kind === "dust") {
+        ctx.fillRect(x | 0, y | 0, f.ss, f.ss);      // a converging mote
+      } else {
+        const half = f.ss * (0.25 + 0.75 * e) * 0.5; // grows from speck to piece
+        const poly = f.poly, co = Math.cos(f.rot), si = Math.sin(f.rot);
+        ctx.beginPath();
+        for (let k = 0; k < poly.length; k++) {
+          const lx = poly[k][0] * half, ly = poly[k][1] * half;
+          const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
+          if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
       }
-      ctx.closePath();
-      ctx.fill();
     }
     ctx.globalAlpha = 1;
 
