@@ -58,14 +58,11 @@
 
   // ---- breakable grid -----------------------------------------------------
   let cellPx = 0, cols = 0, rows = 0;
-  let health = null;     // Float32: 1 = intact marble, 0 = fully gone
-  let restoreT = null;   // Float32: absolute time (s) this cell starts returning
-  let cstate = null;     // Uint8:  0 intact · 1 broken/holding · 2 piece in flight
-  let cgen = null;       // Uint16: generation, invalidates stale return pieces
+  let health = null;     // Float32: 1 = intact marble, 0 = broken (void)
+  let cgen = null;       // Uint16: generation, guards stale fracture events
   let onFigure = null;   // Uint8:  1 = this cell sits on the marble
   let active = null;     // Uint8:  1 = currently in the `damaged` list
-  let damaged = [];      // indices of cells that are < full health
-  const rebuild = [];    // marble pieces flying back home to reassemble
+  let damaged = [];      // indices of broken cells (their void is drawn)
 
   // ---- pointer (with velocity) --------------------------------------------
   const pointer = {
@@ -74,11 +71,12 @@
   };
 
   // ---- particle pools (swap-remove for O(1) deletion) ---------------------
-  const MAX_FRAG = 3000;     // destruction stone shards
-  const MAX_DUST = 36000;    // fine specks
-  const MAX_REBUILD = 9000;  // returning pieces during reconstruction
-  const frags = [];
-  const dust = [];
+  // Each fracture is recorded as an EVENT: a fixed hierarchy of fragments
+  // (large → medium → small → dust) with deterministic trajectories. One
+  // timeline drives it forward (explode), holds, then backward (rewind) —
+  // restoration is literally the destruction played in reverse.
+  const MAX_EVENTS = 1400;
+  const events = [];
 
   // ---- helpers ------------------------------------------------------------
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -137,13 +135,11 @@
     cols = Math.ceil(W / cellPx);
     rows = Math.ceil(H / cellPx);
     health = new Float32Array(cols * rows).fill(1);
-    restoreT = new Float32Array(cols * rows);
-    cstate = new Uint8Array(cols * rows);
     cgen = new Uint16Array(cols * rows);
     onFigure = new Uint8Array(cols * rows);
     active = new Uint8Array(cols * rows);
     damaged = [];
-    rebuild.length = 0;
+    events.length = 0;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
@@ -151,8 +147,7 @@
       }
     }
 
-    frags.length = 0;
-    dust.length = 0;
+    events.length = 0;
   }
 
   // ---- procedural stone-fracture geometry --------------------------------
@@ -193,155 +188,80 @@
     return s - Math.floor(s);
   }
 
-  // ---- spawning -----------------------------------------------------------
-  function spawnFrag(x, y, vx, vy, ss, stage, col) {
-    if (frags.length >= MAX_FRAG) return;
-    const poly = makeShard();
-    // polygon area ≈ mass → heavier pieces rotate & decay a touch slower
-    let area = 0;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
-      area += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
-    const mass = clamp(Math.abs(area) * 0.5, 0.15, 1);
-    // flat-shade the marble colour once (random facet brightness) so we can fill
-    // the shard with a single solid colour — far cheaper than a per-frame clip.
-    const sh = rand(0.72, 1.12);
-    const r = clamp((col[0] * sh) | 0, 0, 255);
-    const g = clamp((col[1] * sh) | 0, 0, 255);
-    const b = clamp((col[2] * sh) | 0, 0, 255);
-    frags.push({
-      x, y, vx, vy,
-      ss, poly, mass,
-      rot: Math.random() * Math.PI * 2,
-      // unique angular velocity, scaled down for heavier pieces
-      vrot: rand(-0.22, 0.22) * (stage === "large" ? 1 : 2.2) / (0.5 + mass),
-      life: 1,
-      decay: (stage === "large" ? rand(0.006, 0.011) : rand(0.012, 0.02)) * (1.2 - mass * 0.4),
-      stage,
-      split: false,
-      cr: col[0], cg: col[1], cb: col[2],
-      fill: `rgb(${r},${g},${b})`,
-    });
-  }
+  // ---- fracture events (recorded for exact time-reversal) -----------------
+  const TA = 0.28, TB = 0.55, TC = 0.78;     // tier phase windows: L | M | S | dust
+  const easeOut = (u) => 1 - (1 - u) * (1 - u);
 
-  function spawnDust(x, y, vx, vy, col) {
-    if (dust.length >= MAX_DUST) return;
-    dust.push({
-      x, y, vx, vy,
-      life: 1,
-      decay: rand(0.003, 0.009),          // dust floats the longest
-      size: Math.max(1, (params.particleSize - 1) + (Math.random() < 0.5 ? 0 : 1)),
-      phase: Math.random() * Math.PI * 2, // for swirl
-      cs: `rgb(${col[0]},${col[1]},${col[2]})`, // precomputed (no per-frame build)
-    });
-  }
-
-  /* Begin a cell's reconstruction: a marble piece coalesces out of the dark a
-     short way off and drifts home, settling into place when it arrives. */
-  function spawnReturn(idx) {
-    const c = idx % cols, r = (idx / cols) | 0;
-    const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
+  // Build one cell's fracture: a hierarchy of fragments with fixed trajectories.
+  // Every child is born at its parent's end position and thrown further outward;
+  // positions/rotations are stored relative to the cell home, so the very same
+  // recorded data plays forward (explode) AND backward (rewind).
+  function createEvent(idx, cx, cy, dirx, diry, force) {
+    if (events.length >= MAX_EVENTS) return false;
     const col = sampleColor(cx, cy) || [210, 205, 196];
     const tt = (params.restoration - 1) / 99;
-    const u = lerp(0.6, 0.14, tt);    // stage time-unit (slower at low restoration)
+    const q = lerp(0.5, 1, (params.density - 1) / 99);
+    const spread = lerp(0.7, 2.2, (params.spread - 10) / 90);
+    const baseAng = Math.atan2(diry, dirx);
     const fillOf = () => {
-      const s = rand(0.8, 1.12);
+      const s = rand(0.78, 1.12);
       return `rgb(${clamp(col[0] * s | 0, 0, 255)},${clamp(col[1] * s | 0, 0, 255)},${clamp(col[2] * s | 0, 0, 255)})`;
     };
-    // Each piece appears far out, then drifts home along a CURVE with inertia
-    // (tangential launch velocity + a spring pull) — destruction run backwards.
-    const emit = (kind, delay, dur, size, dist, finisher) => {
-      if (rebuild.length >= MAX_REBUILD) return;
-      const ang = Math.random() * Math.PI * 2;
-      const tx = -Math.sin(ang), ty = Math.cos(ang);   // tangent → arc
-      const spin = (Math.random() < 0.5 ? -1 : 1) * rand(0.7, 1.8) * dpr;
-      const inw = rand(0.1, 0.7) * dpr;                 // slight inward drift
-      rebuild.push({
-        x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist,
-        vx: tx * spin - Math.cos(ang) * inw, vy: ty * spin - Math.sin(ang) * inw,
-        cx, cy, kind, finisher,
-        poly: kind === "frag" ? makeShard() : null, ss: size,
-        rot: Math.random() * 6.283, vrot: rand(-0.13, 0.13),
-        fill: fillOf(), t0: time + delay, dur, idx, g: cgen[idx],
-      });
+    const off = (mag) => {
+      const a = baseAng + rand(-1.0, 1.0), m = mag * spread;
+      return [Math.cos(a) * m, Math.sin(a) * m];
     };
-    // reverse of destruction, with LOTS of pieces:
-    // dust (many) → small chips → medium fragments → the large piece settles
-    const nd = irand(14, 22);
-    for (let i = 0; i < nd; i++)
-      emit("dust", rand(0, u * 1.0), u * 2.0 * rand(0.8, 1.3),
-        Math.max(1, params.particleSize - 1), rand(120, 320) * dpr * 0.5, false);
-    const ns = irand(6, 10);
-    for (let i = 0; i < ns; i++)
-      emit("frag", u * 1.0 + rand(0, u * 0.8), u * 2.0 * rand(0.8, 1.2),
-        cellPx * rand(0.26, 0.48), rand(90, 210) * dpr * 0.5, false);
-    const nm = irand(2, 4);
-    for (let i = 0; i < nm; i++)
-      emit("frag", u * 1.8 + rand(0, u * 0.6), u * 2.1 * rand(0.85, 1.15),
-        cellPx * rand(0.55, 0.85), rand(70, 150) * dpr * 0.5, false);
-    // the large piece arrives last and settles the cell back to solid marble
-    emit("frag", u * 2.9 + rand(0, u * 0.5), u * 2.3 * rand(0.9, 1.1),
-      cellPx * rand(1.0, 1.45), rand(50, 120) * dpr * 0.5, true);
+    const nodes = [];
+    const mk = (tier, sx, sy, ex, ey, size, p0, p1) => {
+      const n = {
+        tier, sx, sy, ex, ey, size, p0, p1,
+        rotS: rand(0, 6.283),
+        rotE: rand(0, 6.283) + (Math.random() < 0.5 ? -1 : 1) * rand(1.2, 4.5),
+        fill: fillOf(),
+        poly: tier < 3 ? makeShard() : null,
+      };
+      nodes.push(n);
+      return n;
+    };
+    const fcl = force * 0.08;
+    // a large piece breaks off the surface...
+    const Lo = off(cellPx * (0.9 + fcl));
+    const L = mk(0, 0, 0, Lo[0], Lo[1], cellPx * rand(1.0, 1.4), 0, TA);
+    const nm = Math.max(2, Math.round(3 * q));
+    for (let i = 0; i < nm; i++) {                         // ...splits into medium...
+      const Mo = off(cellPx * (0.8 + fcl));
+      const M = mk(1, L.ex, L.ey, L.ex + Mo[0], L.ey + Mo[1], cellPx * rand(0.45, 0.7), TA, TB);
+      const ns = Math.max(2, Math.round(3 * q));
+      for (let j = 0; j < ns; j++) {                       // ...then small...
+        const So = off(cellPx * (0.8 + fcl));
+        const S = mk(2, M.ex, M.ey, M.ex + So[0], M.ey + So[1], cellPx * rand(0.22, 0.38), TB, TC);
+        const nd = Math.max(2, Math.round(3 * q));
+        for (let d = 0; d < nd; d++) {                     // ...then dust
+          const Do = off(cellPx * (1.0 + fcl));
+          mk(3, S.ex, S.ey, S.ex + Do[0], S.ey + Do[1],
+            Math.max(1, params.particleSize - 1), TC, 1);
+        }
+      }
+    }
+    events.push({
+      idx, gen: cgen[idx], cx, cy, t0: time, nodes,
+      explodeDur: 1.1 * rand(0.85, 1.15),    // violent, but long enough to read
+      holdDur: lerp(8.0, 0.3, tt),           // the void lingers
+      rewindDur: lerp(4.6, 1.0, tt),         // calm, deliberate reverse
+    });
+    return true;
   }
 
-  /* Fracture one cell: clear it from the sculpture and throw its matter out. */
+  /* Fracture one cell: open the void and record the event so the restoration
+     can replay it backwards (exact reverse physics — not a redraw). */
   function breakCell(idx, cx, cy, force) {
-    const col = sampleColor(cx, cy) || [220, 215, 205];
-
-    // permanently clear this cell from the visible sculpture (mask)
-    health[idx] = 0;
-    cstate[idx] = 1;        // broken / holding
-    cgen[idx]++;            // invalidate any in-flight return piece for this cell
-    // Restoration is a center-out wave seeded at the impact point (the cursor):
-    // cells nearer the seed return first, outer cells later, with timing jitter.
-    const t = (params.restoration - 1) / 99;
-    const hold = lerp(8.5, 0.15, t);          // s the void lingers before rebuilding
-    const wave = lerp(0.010, 0.0008, t);      // s per device-px from the seed
-    const tjit = lerp(1.4, 0.1, t);           // random per-piece timing spread
-    const seedDist = Math.hypot(cx - pointer.x, cy - pointer.y);
-    restoreT[idx] = time + hold + seedDist * wave + Math.random() * tjit;
-    if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
-
-    // quantity scales with the density control
-    const q = lerp(0.4, 1, (params.density - 1) / 99);
-    const nLarge = irand(2, 6);
-    const nSmall = Math.round(irand(6, 16) * q);
-    const nDust = Math.round(irand(30, 80) * q);
-
-    // break direction: outward from the cursor + inherited mouse velocity
     let dx = cx - pointer.x, dy = cy - pointer.y;
-    let d = Math.hypot(dx, dy);
-    if (d < 1) { const a = Math.random() * 6.283; dx = Math.cos(a); dy = Math.sin(a); d = 1; }
-    const nx = dx / d, ny = dy / d;
-    const ix = pointer.vx * 0.35, iy = pointer.vy * 0.35; // inherited momentum
-    const sizeK = params.particleSize / 3;
-
-    const vel = (spdFactor, jitter) => {
-      const sp = force * spdFactor * rand(0.5, 1.2);
-      return [
-        nx * sp + ix + rand(-jitter, jitter),
-        ny * sp + iy + rand(-jitter, jitter),
-      ];
-    };
-
-    // large fragments fly out first (slower, big, rotating)
-    const jit = cellPx * 0.5; // spread within the cell so chips aren't grid-aligned
-    for (let i = 0; i < nLarge; i++) {
-      const [vx, vy] = vel(0.55, force * 0.3);
-      spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy,
-        cellPx * rand(0.95, 1.6) * sizeK, "large", col);
-    }
-    // small fragments scatter faster
-    for (let i = 0; i < nSmall; i++) {
-      const [vx, vy] = vel(1.0, force * 0.5);
-      spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy,
-        cellPx * rand(0.4, 0.7) * sizeK, "small", col);
-    }
-    // fine dust
-    for (let i = 0; i < nDust; i++) {
-      const [vx, vy] = vel(1.35, force * 0.7);
-      spawnDust(cx + rand(-cellPx, cellPx) * 0.5, cy + rand(-cellPx, cellPx) * 0.5,
-        vx, vy, col);
-    }
+    if (Math.abs(dx) + Math.abs(dy) < 1) { const a = Math.random() * 6.283; dx = Math.cos(a); dy = Math.sin(a); }
+    dx += pointer.vx * 0.5; dy += pointer.vy * 0.5;        // inherit mouse momentum
+    cgen[idx]++;
+    if (!createEvent(idx, cx, cy, dx, dy, force)) return;  // at capacity → leave intact
+    health[idx] = 0;                                       // open the void
+    if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
   }
 
   // ---- animation loop -----------------------------------------------------
@@ -351,8 +271,6 @@
     time += 0.016;
     const radius = params.cursorRadius * dpr;
     const gOpacity = params.opacity / 100;
-    const fdrag = 0.965, sdrag = 0.955, ddrag = 0.985; // large/small/dust drag
-    const turb = lerp(0.02, 0.12, (params.spread - 10) / 90) * dpr;
 
     // --- pointer velocity ---
     pointer.vx = pointer.x - pointer.px;
@@ -383,17 +301,19 @@
       }
     }
 
-    // --- restoration: each cell holds, then a piece flies home to rebuild it ---
-    // (the piece itself flips health→1 on arrival; staggered by the seed wave)
+    // --- advance fracture events; a finished rewind restores its cell ---
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (time - ev.t0 >= ev.explodeDur + ev.holdDur + ev.rewindDur) {
+        if (cgen[ev.idx] === ev.gen) health[ev.idx] = 1;  // large piece home → solid
+        events[i] = events[events.length - 1]; events.pop();
+      }
+    }
     let w = 0;
     for (let i = 0; i < damaged.length; i++) {
       const idx = damaged[i];
-      if (cstate[idx] === 1 && time >= restoreT[idx]) {
-        spawnReturn(idx);       // launch the returning marble piece
-        cstate[idx] = 2;        // in flight
-      }
-      if (health[idx] >= 1) { active[idx] = 0; cstate[idx] = 0; } // fully restored → drop
-      else { damaged[w++] = idx; }
+      if (health[idx] >= 1) active[idx] = 0;
+      else damaged[w++] = idx;
     }
     damaged.length = w;
 
@@ -429,127 +349,53 @@
     }
     ctx.globalAlpha = 1;
 
-    // --- update + draw textured fragments (large & small) ---
-    for (let i = frags.length - 1; i >= 0; i--) {
-      const p = frags[i];
-      const drag = p.stage === "large" ? fdrag : sdrag;
-      p.vx = p.vx * drag + (Math.random() - 0.5) * turb;
-      p.vy = p.vy * drag + (Math.random() - 0.5) * turb;
-      p.x += p.vx;
-      p.y += p.vy;
-      p.rot += p.vrot;
-      p.vrot *= 0.99;
-      p.life -= p.decay;
-
-      // --- cascade: large → small → dust ---
-      if (!p.split && p.life < 0.5) {
-        p.split = true;
-        const col = [p.cr, p.cg, p.cb];
-        if (p.stage === "large") {
-          const n = irand(2, 5);
-          for (let k = 0; k < n; k++) {
-            spawnFrag(p.x, p.y,
-              p.vx * 1.1 + rand(-1, 1) * dpr, p.vy * 1.1 + rand(-1, 1) * dpr,
-              p.ss * rand(0.4, 0.6), "small", col);
-          }
+    // --- fracture events: explode forward, hold, then REWIND (time reversal) --
+    // Each event samples one timeline. The same recorded fragment trajectories
+    // play outward during the explosion and inward during the rewind, so the
+    // exact pieces that broke off are the ones that return, in reverse order:
+    // dust → small → medium → large → surface.
+    for (let e = 0; e < events.length; e++) {
+      const ev = events[e];
+      const el = time - ev.t0;
+      let s;
+      if (el < ev.explodeDur) s = el / ev.explodeDur;                 // explode 0→1
+      else if (el < ev.explodeDur + ev.holdDur) s = 1;               // hold (void)
+      else s = 1 - (el - ev.explodeDur - ev.holdDur) / ev.rewindDur; // rewind 1→0
+      if (s < 0) s = 0; else if (s > 1) s = 1;
+      const cx = ev.cx, cy = ev.cy, nodes = ev.nodes;
+      for (let n = 0; n < nodes.length; n++) {
+        const nd = nodes[n];
+        if (s < nd.p0 || s > nd.p1) continue;          // only this tier is active
+        let u = (s - nd.p0) / (nd.p1 - nd.p0);
+        if (u < 0) u = 0; else if (u > 1) u = 1;
+        const eu = easeOut(u);
+        // cross-dissolve at tier boundaries (merge/split); the root large piece
+        // is solid from the surface (no fade-in) so it reconnects seamlessly.
+        const fi = nd.tier === 0 ? 1 : (u < 0.12 ? u / 0.12 : 1);
+        const fo = (1 - u) < 0.12 ? (1 - u) / 0.12 : 1;
+        const a = fi * fo * gOpacity;
+        if (a <= 0.01) continue;
+        const x = cx + nd.sx + (nd.ex - nd.sx) * eu;
+        const y = cy + nd.sy + (nd.ey - nd.sy) * eu;
+        const sz = nd.size * (1 - 0.45 * eu);          // grows as it re-forms (reverse)
+        ctx.globalAlpha = a;
+        ctx.fillStyle = nd.fill;
+        if (nd.tier === 3) {
+          const d = Math.max(1, sz | 0);
+          ctx.fillRect(x | 0, y | 0, d, d);
         } else {
-          const n = irand(3, 6);
-          for (let k = 0; k < n; k++) {
-            spawnDust(p.x, p.y,
-              p.vx * 0.9 + rand(-1.4, 1.4) * dpr, p.vy * 0.9 + rand(-1.4, 1.4) * dpr,
-              col);
+          const rot = nd.rotS + (nd.rotE - nd.rotS) * eu;
+          const half = sz * 0.5, poly = nd.poly, co = Math.cos(rot), si = Math.sin(rot);
+          ctx.beginPath();
+          for (let k = 0; k < poly.length; k++) {
+            const lx = poly[k][0] * half, ly = poly[k][1] * half;
+            const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
+            if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
           }
+          ctx.closePath();
+          ctx.fill();
         }
       }
-
-      if (p.life <= 0) {
-        // swap-remove
-        frags[i] = frags[frags.length - 1];
-        frags.pop();
-        continue;
-      }
-
-      // Draw the shard as a solid marble-coloured polygon. We transform the
-      // vertices in JS and fill in absolute coords — no per-frame save/rotate/
-      // clip/drawImage, which is dramatically cheaper at full resolution.
-      const half = p.ss * (0.5 + p.life * 0.5) * 0.5; // shrinks as it ages
-      const poly = p.poly;
-      const co = Math.cos(p.rot), si = Math.sin(p.rot);
-      const x = p.x, y = p.y;
-      ctx.globalAlpha = clamp(p.life * 1.3, 0, 1) * gOpacity;
-      ctx.fillStyle = p.fill;
-      ctx.beginPath();
-      for (let k = 0; k < poly.length; k++) {
-        const lx = poly[k][0] * half, ly = poly[k][1] * half;
-        const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
-        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-
-    // --- update + draw returning marble pieces (the sculpture reassembling) ---
-    // Each piece coalesces from faint/small to solid as it eases home, then
-    // settles — flipping its cell back to intact so the surface "remembers" it.
-    for (let i = rebuild.length - 1; i >= 0; i--) {
-      const f = rebuild[i];
-      let p = (time - f.t0) / f.dur;
-      if (p < 0) continue;                          // this stage hasn't begun yet
-      if (p > 1) p = 1;
-      // physics: a spring pulls toward home, damped — combined with the launch
-      // velocity this traces a decelerating CURVE with inertia (rewind motion).
-      const k = lerp(0.012, 0.07, p);               // tighten the pull as it nears
-      f.vx = (f.vx + (f.cx - f.x) * k) * 0.9;
-      f.vy = (f.vy + (f.cy - f.y) * k) * 0.9;
-      f.x += f.vx; f.y += f.vy;
-      f.rot += f.vrot; f.vrot *= 0.985;
-      if (p >= 1) {
-        if (f.finisher && cgen[f.idx] === f.g) health[f.idx] = 1; // large piece lands → intact
-        rebuild[i] = rebuild[rebuild.length - 1]; rebuild.pop();
-        continue;
-      }
-      // finisher fades in & stays; dust/chips fade in then out as they merge inward
-      const a = (f.finisher ? clamp(p * 1.8, 0, 1)
-                            : (p < 0.7 ? p / 0.7 : Math.max(0, (1 - p) / 0.3))) * gOpacity;
-      if (a <= 0.01) continue;
-      ctx.globalAlpha = a;
-      ctx.fillStyle = f.fill;
-      if (f.kind === "dust") {
-        ctx.fillRect(f.x | 0, f.y | 0, f.ss, f.ss);  // a converging mote
-      } else {
-        const half = f.ss * (0.3 + 0.7 * Math.min(1, p * 1.3)) * 0.5; // grows in
-        const poly = f.poly, co = Math.cos(f.rot), si = Math.sin(f.rot);
-        ctx.beginPath();
-        for (let kk = 0; kk < poly.length; kk++) {
-          const lx = poly[kk][0] * half, ly = poly[kk][1] * half;
-          const px = f.x + lx * co - ly * si, py = f.y + lx * si + ly * co;
-          if (kk === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-    ctx.globalAlpha = 1;
-
-    // --- update + draw fine dust (turbulent swirl, floats longest) ---
-    for (let i = dust.length - 1; i >= 0; i--) {
-      const p = dust[i];
-      p.phase += 0.12;
-      // swirl + turbulence, no gravity
-      p.vx = p.vx * ddrag + Math.cos(p.phase) * turb * 0.6 + (Math.random() - 0.5) * turb * 0.5;
-      p.vy = p.vy * ddrag + Math.sin(p.phase * 1.3) * turb * 0.6 + (Math.random() - 0.5) * turb * 0.5;
-      p.x += p.vx;
-      p.y += p.vy;
-      p.life -= p.decay;
-      if (p.life <= 0) {
-        dust[i] = dust[dust.length - 1];
-        dust.pop();
-        continue;
-      }
-      ctx.globalAlpha = p.life * gOpacity;
-      ctx.fillStyle = p.cs;
-      ctx.fillRect(p.x | 0, p.y | 0, p.size, p.size);
     }
     ctx.globalAlpha = 1;
 
