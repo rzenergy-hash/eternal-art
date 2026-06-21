@@ -76,7 +76,9 @@
   // timeline drives it forward (explode), holds, then backward (rewind) —
   // restoration is literally the destruction played in reverse.
   const MAX_EVENTS = 1400;
+  const MAX_NODES = 60000;   // global cap on restoration pieces (keeps it smooth)
   const events = [];
+  let nodeCount = 0;         // total restoration pieces currently alive
   // Visual destruction debris (the explosion look): random-physics shards + dust
   // that fly out and fade. The reverse rebuild itself is handled by `events`.
   const MAX_FRAG = 3000;
@@ -154,6 +156,7 @@
     }
 
     events.length = 0;
+    nodeCount = 0;
     frags.length = 0;
     dust.length = 0;
   }
@@ -284,46 +287,41 @@
       return `rgb(${clamp(col[0] * s | 0, 0, 255)},${clamp(col[1] * s | 0, 0, 255)},${clamp(col[2] * s | 0, 0, 255)})`;
     };
     const off = (mag) => {
-      const a = baseAng + rand(-1.0, 1.0), m = mag * spread;
+      const a = baseAng + rand(-1.4, 1.4), m = mag * spread;
       return [Math.cos(a) * m, Math.sin(a) * m];
     };
     const nodes = [];
-    const mk = (tier, sx, sy, ex, ey, size, p0, p1) => {
-      const n = {
-        tier, sx, sy, ex, ey, size, p0, p1,
+    // every piece starts AT the cell home and is thrown outward; the rewind plays
+    // it backward → the piece gathers from out there back into place.
+    const mk = (tier, ex, ey, size, p0, p1) => {
+      nodes.push({
+        tier, sx: 0, sy: 0, ex, ey, size, p0, p1,
         rotS: rand(0, 6.283),
-        rotE: rand(0, 6.283) + (Math.random() < 0.5 ? -1 : 1) * rand(1.2, 4.5),
+        rotE: rand(0, 6.283) + (Math.random() < 0.5 ? -1 : 1) * rand(1.2, 5),
         fill: fillOf(),
         poly: tier < 3 ? makeShard() : null,
-      };
-      nodes.push(n);
-      return n;
+      });
     };
-    const fcl = force * 0.08;
-    // a large piece breaks off the surface...
-    const Lo = off(cellPx * (0.9 + fcl));
-    const L = mk(0, 0, 0, Lo[0], Lo[1], cellPx * rand(1.0, 1.4), 0, TA);
-    const nm = Math.max(2, Math.round(3 * q));
-    for (let i = 0; i < nm; i++) {                         // ...splits into medium...
-      const Mo = off(cellPx * (0.8 + fcl));
-      const M = mk(1, L.ex, L.ey, L.ex + Mo[0], L.ey + Mo[1], cellPx * rand(0.45, 0.7), TA, TB);
-      const ns = Math.max(2, Math.round(3 * q));
-      for (let j = 0; j < ns; j++) {                       // ...then small...
-        const So = off(cellPx * (0.8 + fcl));
-        const S = mk(2, M.ex, M.ey, M.ex + So[0], M.ey + So[1], cellPx * rand(0.22, 0.38), TB, TC);
-        const nd = Math.max(2, Math.round(3 * q));
-        for (let d = 0; d < nd; d++) {                     // ...then dust
-          const Do = off(cellPx * (1.0 + fcl));
-          mk(3, S.ex, S.ey, S.ex + Do[0], S.ey + Do[1],
-            Math.max(1, params.particleSize - 1), TC, 1);
-        }
-      }
+    // restoration is built from MANY small chips + even MORE dust — no big pieces
+    let nS = Math.round(lerp(14, 30, q));
+    let nD = Math.round(lerp(90, 220, q));
+    const budget = Math.max(20, MAX_NODES - nodeCount);
+    if (nS + nD > budget) { const k = budget / (nS + nD); nS = (nS * k) | 0; nD = (nD * k) | 0; }
+    for (let i = 0; i < nS; i++) {                          // small chips gather last
+      const o = off(cellPx * rand(0.5, 1.5));
+      mk(2, o[0], o[1], cellPx * rand(0.18, 0.34), 0, 0.72);
     }
+    const dsz = Math.max(1, params.particleSize - 2);
+    for (let i = 0; i < nD; i++) {                          // dust gathers first
+      const o = off(cellPx * rand(0.8, 2.8));
+      mk(3, o[0], o[1], dsz, 0.4, 1);
+    }
+    nodeCount += nodes.length;
     events.push({
       idx, gen: cgen[idx], cx, cy, t0: time, nodes,
-      explodeDur: 1.1 * rand(0.85, 1.15),    // violent, but long enough to read
+      explodeDur: 1.0 * rand(0.85, 1.15),
       holdDur: lerp(8.0, 0.3, tt),           // the void lingers
-      rewindDur: lerp(4.6, 1.0, tt),         // calm, deliberate reverse
+      rewindDur: lerp(5.0, 1.2, tt),         // calm, deliberate reverse
     });
     return true;
   }
@@ -384,7 +382,8 @@
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i];
       if (time - ev.t0 >= ev.explodeDur + ev.holdDur + ev.rewindDur) {
-        if (cgen[ev.idx] === ev.gen) health[ev.idx] = 1;  // large piece home → solid
+        if (cgen[ev.idx] === ev.gen) health[ev.idx] = 1;  // void closes → surface back
+        nodeCount -= ev.nodes.length;
         events[i] = events[events.length - 1]; events.pop();
       }
     }
