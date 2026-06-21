@@ -77,6 +77,12 @@
   // restoration is literally the destruction played in reverse.
   const MAX_EVENTS = 1400;
   const events = [];
+  // Visual destruction debris (the explosion look): random-physics shards + dust
+  // that fly out and fade. The reverse rebuild itself is handled by `events`.
+  const MAX_FRAG = 3000;
+  const MAX_DUST = 36000;
+  const frags = [];
+  const dust = [];
 
   // ---- helpers ------------------------------------------------------------
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -148,6 +154,8 @@
     }
 
     events.length = 0;
+    frags.length = 0;
+    dust.length = 0;
   }
 
   // ---- procedural stone-fracture geometry --------------------------------
@@ -186,6 +194,74 @@
   function cellNoise(idx, i) {
     const s = Math.sin(idx * 12.9898 + i * 78.233) * 43758.5453;
     return s - Math.floor(s);
+  }
+
+  // ---- destruction debris (the explosion you see while breaking) ----------
+  function spawnFrag(x, y, vx, vy, ss, stage, col) {
+    if (frags.length >= MAX_FRAG) return;
+    const poly = makeShard();
+    let area = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+      area += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
+    const mass = clamp(Math.abs(area) * 0.5, 0.15, 1);
+    const sh = rand(0.72, 1.12);
+    const r = clamp((col[0] * sh) | 0, 0, 255);
+    const g = clamp((col[1] * sh) | 0, 0, 255);
+    const b = clamp((col[2] * sh) | 0, 0, 255);
+    frags.push({
+      x, y, vx, vy, ss, poly, mass,
+      rot: Math.random() * Math.PI * 2,
+      vrot: rand(-0.22, 0.22) * (stage === "large" ? 1 : 2.2) / (0.5 + mass),
+      life: 1,
+      decay: (stage === "large" ? rand(0.006, 0.011) : rand(0.012, 0.02)) * (1.2 - mass * 0.4),
+      stage, split: false,
+      cr: col[0], cg: col[1], cb: col[2],
+      fill: `rgb(${r},${g},${b})`,
+    });
+  }
+
+  function spawnDust(x, y, vx, vy, col) {
+    if (dust.length >= MAX_DUST) return;
+    dust.push({
+      x, y, vx, vy, life: 1,
+      decay: rand(0.003, 0.009),
+      size: Math.max(1, (params.particleSize - 1) + (Math.random() < 0.5 ? 0 : 1)),
+      phase: Math.random() * Math.PI * 2,
+      cs: `rgb(${col[0]},${col[1]},${col[2]})`,
+    });
+  }
+
+  // Throw out the visible explosion for one cell: large shards → small → dust,
+  // flung outward from the cursor with inherited mouse momentum.
+  function emitDebris(cx, cy, force) {
+    const col = sampleColor(cx, cy) || [220, 215, 205];
+    const q = lerp(0.4, 1, (params.density - 1) / 99);
+    const nLarge = irand(2, 6);
+    const nSmall = Math.round(irand(6, 16) * q);
+    const nDust = Math.round(irand(30, 80) * q);
+    let dx = cx - pointer.x, dy = cy - pointer.y;
+    let d = Math.hypot(dx, dy);
+    if (d < 1) { const a = Math.random() * 6.283; dx = Math.cos(a); dy = Math.sin(a); d = 1; }
+    const nx = dx / d, ny = dy / d;
+    const ix = pointer.vx * 0.35, iy = pointer.vy * 0.35;
+    const sizeK = params.particleSize / 3;
+    const vel = (spdFactor, jitter) => {
+      const sp = force * spdFactor * rand(0.5, 1.2);
+      return [nx * sp + ix + rand(-jitter, jitter), ny * sp + iy + rand(-jitter, jitter)];
+    };
+    const jit = cellPx * 0.5;
+    for (let i = 0; i < nLarge; i++) {
+      const [vx, vy] = vel(0.55, force * 0.3);
+      spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy, cellPx * rand(0.95, 1.6) * sizeK, "large", col);
+    }
+    for (let i = 0; i < nSmall; i++) {
+      const [vx, vy] = vel(1.0, force * 0.5);
+      spawnFrag(cx + rand(-jit, jit), cy + rand(-jit, jit), vx, vy, cellPx * rand(0.4, 0.7) * sizeK, "small", col);
+    }
+    for (let i = 0; i < nDust; i++) {
+      const [vx, vy] = vel(1.35, force * 0.7);
+      spawnDust(cx + rand(-cellPx, cellPx) * 0.5, cy + rand(-cellPx, cellPx) * 0.5, vx, vy, col);
+    }
   }
 
   // ---- fracture events (recorded for exact time-reversal) -----------------
@@ -259,9 +335,10 @@
     if (Math.abs(dx) + Math.abs(dy) < 1) { const a = Math.random() * 6.283; dx = Math.cos(a); dy = Math.sin(a); }
     dx += pointer.vx * 0.5; dy += pointer.vy * 0.5;        // inherit mouse momentum
     cgen[idx]++;
-    if (!createEvent(idx, cx, cy, dx, dy, force)) return;  // at capacity → leave intact
+    if (!createEvent(idx, cx, cy, dx, dy, force)) return;  // record the reversible fracture
     health[idx] = 0;                                       // open the void
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
+    emitDebris(cx, cy, force);                             // the visible explosion
   }
 
   // ---- animation loop -----------------------------------------------------
@@ -271,6 +348,8 @@
     time += 0.016;
     const radius = params.cursorRadius * dpr;
     const gOpacity = params.opacity / 100;
+    const fdrag = 0.965, sdrag = 0.955, ddrag = 0.985; // large/small/dust drag
+    const turb = lerp(0.02, 0.12, (params.spread - 10) / 90) * dpr;
 
     // --- pointer velocity ---
     pointer.vx = pointer.x - pointer.px;
@@ -357,6 +436,7 @@
     for (let e = 0; e < events.length; e++) {
       const ev = events[e];
       const el = time - ev.t0;
+      if (el < ev.explodeDur) continue;   // the explosion is drawn by the debris below
       let s;
       if (el < ev.explodeDur) s = el / ev.explodeDur;                 // explode 0→1
       else if (el < ev.explodeDur + ev.holdDur) s = 1;               // hold (void)
@@ -396,6 +476,59 @@
           ctx.fill();
         }
       }
+    }
+    ctx.globalAlpha = 1;
+
+    // --- destruction debris: shards tumble, cascade to dust, fly with inertia --
+    for (let i = frags.length - 1; i >= 0; i--) {
+      const p = frags[i];
+      const drag = p.stage === "large" ? fdrag : sdrag;
+      p.vx = p.vx * drag + (Math.random() - 0.5) * turb;
+      p.vy = p.vy * drag + (Math.random() - 0.5) * turb;
+      p.x += p.vx; p.y += p.vy;
+      p.rot += p.vrot; p.vrot *= 0.99;
+      p.life -= p.decay;
+      if (!p.split && p.life < 0.5) {            // cascade: large → small → dust
+        p.split = true;
+        const col = [p.cr, p.cg, p.cb];
+        if (p.stage === "large") {
+          const n = irand(2, 5);
+          for (let k = 0; k < n; k++)
+            spawnFrag(p.x, p.y, p.vx * 1.1 + rand(-1, 1) * dpr, p.vy * 1.1 + rand(-1, 1) * dpr,
+              p.ss * rand(0.4, 0.6), "small", col);
+        } else {
+          const n = irand(3, 6);
+          for (let k = 0; k < n; k++)
+            spawnDust(p.x, p.y, p.vx * 0.9 + rand(-1.4, 1.4) * dpr, p.vy * 0.9 + rand(-1.4, 1.4) * dpr, col);
+        }
+      }
+      if (p.life <= 0) { frags[i] = frags[frags.length - 1]; frags.pop(); continue; }
+      const half = p.ss * (0.5 + p.life * 0.5) * 0.5;
+      const poly = p.poly, co = Math.cos(p.rot), si = Math.sin(p.rot), x = p.x, y = p.y;
+      ctx.globalAlpha = clamp(p.life * 1.3, 0, 1) * gOpacity;
+      ctx.fillStyle = p.fill;
+      ctx.beginPath();
+      for (let k = 0; k < poly.length; k++) {
+        const lx = poly[k][0] * half, ly = poly[k][1] * half;
+        const px = x + lx * co - ly * si, py = y + lx * si + ly * co;
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    for (let i = dust.length - 1; i >= 0; i--) {
+      const p = dust[i];
+      p.phase += 0.12;
+      p.vx = p.vx * ddrag + Math.cos(p.phase) * turb * 0.6 + (Math.random() - 0.5) * turb * 0.5;
+      p.vy = p.vy * ddrag + Math.sin(p.phase * 1.3) * turb * 0.6 + (Math.random() - 0.5) * turb * 0.5;
+      p.x += p.vx; p.y += p.vy;
+      p.life -= p.decay;
+      if (p.life <= 0) { dust[i] = dust[dust.length - 1]; dust.pop(); continue; }
+      ctx.globalAlpha = p.life * gOpacity;
+      ctx.fillStyle = p.cs;
+      ctx.fillRect(p.x | 0, p.y | 0, p.size, p.size);
     }
     ctx.globalAlpha = 1;
 
