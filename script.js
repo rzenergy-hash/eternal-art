@@ -49,7 +49,6 @@
   // full-screen blit per frame instead of three.
   const baseCanvas = document.createElement("canvas");   // pristine statue
   const baseCtx = baseCanvas.getContext("2d");
-  let blobSprite = null;  // soft void blob, drawn overlapping so holes look organic
 
   // ---- state --------------------------------------------------------------
   let W = 0, H = 0, dpr = 1;
@@ -151,20 +150,6 @@
     voidScale = new Float32Array(cols * rows).fill(1);
     damaged = [];
     events.length = 0;
-
-    // soft void blob sprite (opaque core, feathered rim). Overlapped + jittered,
-    // these dissolve the grid completely: no cell edges, no hard boundaries.
-    if (!blobSprite) {
-      blobSprite = document.createElement("canvas");
-      blobSprite.width = blobSprite.height = 96;
-      const bg = blobSprite.getContext("2d");
-      const g = bg.createRadialGradient(48, 48, 0, 48, 48, 48);
-      g.addColorStop(0, "rgba(5,5,6,1)");
-      g.addColorStop(0.5, "rgba(5,5,6,1)");
-      g.addColorStop(1, "rgba(5,5,6,0)");
-      bg.fillStyle = g;
-      bg.fillRect(0, 0, 96, 96);
-    }
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
@@ -432,21 +417,30 @@
     ctx.drawImage(baseCanvas, 0, 0);
     ctx.globalCompositeOperation = "source-over";
 
-    // The void is a field of soft, overlapping, off-grid blobs that shrink as
-    // each wound closes — so the absence reads as torn matter, never as cells.
+    // Hard-edged void: irregular opaque polygons, centres jittered OFF the grid
+    // and heavily overlapping, so the union is one organic torn shape (no cells,
+    // no soft halo). Each shrinks smoothly as its wound closes.
+    ctx.fillStyle = "#050506";
+    const nv = 9;
     for (let i = 0; i < damaged.length; i++) {
       const idx = damaged[i];
       const vs = voidScale[idx];
-      if (vs <= 0.02) continue;
+      if (vs <= 0.04) continue;
       const c = idx % cols, r = (idx / cols) | 0;
       const jx = (cellNoise(idx, 1) - 0.5) * cellPx * 0.55;
       const jy = (cellNoise(idx, 2) - 0.5) * cellPx * 0.55;
       const cx = (c + 0.5) * cellPx + jx, cy = (r + 0.5) * cellPx + jy;
-      const rad = cellPx * 1.55 * (0.22 + 0.78 * vs);   // shrinks as it closes
-      ctx.globalAlpha = Math.min(1, vs * 1.6);
-      ctx.drawImage(blobSprite, cx - rad, cy - rad, rad * 2, rad * 2);
+      const baseR = cellPx * 1.35 * (0.16 + 0.84 * vs);   // shrinks as it closes
+      ctx.beginPath();
+      for (let k = 0; k < nv; k++) {
+        const ang = (k / nv) * Math.PI * 2 + cellNoise(idx, k + 20) * 0.7;
+        const rr = baseR * (0.55 + cellNoise(idx, k) * 0.85);
+        const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
     }
-    ctx.globalAlpha = 1;
 
     // --- fracture events: explode forward, hold, then REWIND (time reversal) --
     // Each event samples one timeline. The same recorded fragment trajectories
