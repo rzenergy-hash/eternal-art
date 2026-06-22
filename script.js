@@ -49,6 +49,7 @@
   // full-screen blit per frame instead of three.
   const baseCanvas = document.createElement("canvas");   // pristine statue
   const baseCtx = baseCanvas.getContext("2d");
+  let blobSprite = null;  // soft void blob, drawn overlapping so holes look organic
 
   // ---- state --------------------------------------------------------------
   let W = 0, H = 0, dpr = 1;
@@ -62,6 +63,7 @@
   let cgen = null;       // Uint16: generation, guards stale fracture events
   let onFigure = null;   // Uint8:  1 = this cell sits on the marble
   let active = null;     // Uint8:  1 = currently in the `damaged` list
+  let voidScale = null;  // Float32: 1 = full void, shrinks → 0 as the wound closes
   let damaged = [];      // indices of broken cells (their void is drawn)
 
   // ---- pointer (with velocity) --------------------------------------------
@@ -146,8 +148,23 @@
     cgen = new Uint16Array(cols * rows);
     onFigure = new Uint8Array(cols * rows);
     active = new Uint8Array(cols * rows);
+    voidScale = new Float32Array(cols * rows).fill(1);
     damaged = [];
     events.length = 0;
+
+    // soft void blob sprite (opaque core, feathered rim). Overlapped + jittered,
+    // these dissolve the grid completely: no cell edges, no hard boundaries.
+    if (!blobSprite) {
+      blobSprite = document.createElement("canvas");
+      blobSprite.width = blobSprite.height = 96;
+      const bg = blobSprite.getContext("2d");
+      const g = bg.createRadialGradient(48, 48, 0, 48, 48, 48);
+      g.addColorStop(0, "rgba(5,5,6,1)");
+      g.addColorStop(0.5, "rgba(5,5,6,1)");
+      g.addColorStop(1, "rgba(5,5,6,0)");
+      bg.fillStyle = g;
+      bg.fillRect(0, 0, 96, 96);
+    }
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
@@ -317,11 +334,15 @@
       mk(3, o[0], o[1], dsz, 0.4, 1);
     }
     nodeCount += nodes.length;
+    // jitter the gather point off the grid; desync timing so neighbours never
+    // close in lockstep → the healing front is irregular, never grid-aligned
+    const jx = (cellNoise(idx, 1) - 0.5) * cellPx * 0.55;
+    const jy = (cellNoise(idx, 2) - 0.5) * cellPx * 0.55;
     events.push({
-      idx, gen: cgen[idx], cx, cy, t0: time, nodes,
+      idx, gen: cgen[idx], cx: cx + jx, cy: cy + jy, t0: time, nodes,
       explodeDur: 1.0 * rand(0.85, 1.15),
-      holdDur: lerp(8.0, 0.3, tt),           // the void lingers
-      rewindDur: lerp(5.0, 1.2, tt),         // calm, deliberate reverse
+      holdDur: lerp(8.0, 0.3, tt) * rand(0.8, 1.4),   // staggered linger
+      rewindDur: lerp(5.0, 1.2, tt) * rand(0.85, 1.25),
     });
     return true;
   }
@@ -335,6 +356,7 @@
     cgen[idx]++;
     if (!createEvent(idx, cx, cy, dx, dy, force)) return;  // record the reversible fracture
     health[idx] = 0;                                       // open the void
+    voidScale[idx] = 1;
     if (!active[idx]) { active[idx] = 1; damaged.push(idx); }
     emitDebris(cx, cy, force);                             // the visible explosion
   }
@@ -378,11 +400,16 @@
       }
     }
 
-    // --- advance fracture events; a finished rewind restores its cell ---
+    // --- advance fracture events; the void shrinks smoothly through the rewind ---
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i];
-      if (time - ev.t0 >= ev.explodeDur + ev.holdDur + ev.rewindDur) {
-        if (cgen[ev.idx] === ev.gen) health[ev.idx] = 1;  // void closes → surface back
+      const el = time - ev.t0;
+      const reStart = ev.explodeDur + ev.holdDur;
+      if (el >= reStart && cgen[ev.idx] === ev.gen) {
+        voidScale[ev.idx] = Math.max(0, 1 - (el - reStart) / ev.rewindDur);
+      }
+      if (el >= reStart + ev.rewindDur) {
+        if (cgen[ev.idx] === ev.gen) { health[ev.idx] = 1; voidScale[ev.idx] = 0; }
         nodeCount -= ev.nodes.length;
         events[i] = events[events.length - 1]; events.pop();
       }
@@ -405,25 +432,19 @@
     ctx.drawImage(baseCanvas, 0, 0);
     ctx.globalCompositeOperation = "source-over";
 
-    ctx.fillStyle = "#050506";
-    const nv = 9;
+    // The void is a field of soft, overlapping, off-grid blobs that shrink as
+    // each wound closes — so the absence reads as torn matter, never as cells.
     for (let i = 0; i < damaged.length; i++) {
       const idx = damaged[i];
-      const a = 1 - health[idx];
-      if (a <= 0.01) continue;
+      const vs = voidScale[idx];
+      if (vs <= 0.02) continue;
       const c = idx % cols, r = (idx / cols) | 0;
-      const cx = (c + 0.5) * cellPx, cy = (r + 0.5) * cellPx;
-      const baseR = cellPx * 1.05;
-      ctx.globalAlpha = a;
-      ctx.beginPath();
-      for (let k = 0; k < nv; k++) {
-        const ang = (k / nv) * Math.PI * 2 + cellNoise(idx, k + 20) * 0.6;
-        const rr = baseR * (0.5 + cellNoise(idx, k) * 0.9);
-        const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
-        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.fill();
+      const jx = (cellNoise(idx, 1) - 0.5) * cellPx * 0.55;
+      const jy = (cellNoise(idx, 2) - 0.5) * cellPx * 0.55;
+      const cx = (c + 0.5) * cellPx + jx, cy = (r + 0.5) * cellPx + jy;
+      const rad = cellPx * 1.55 * (0.22 + 0.78 * vs);   // shrinks as it closes
+      ctx.globalAlpha = Math.min(1, vs * 1.6);
+      ctx.drawImage(blobSprite, cx - rad, cy - rad, rad * 2, rad * 2);
     }
     ctx.globalAlpha = 1;
 
