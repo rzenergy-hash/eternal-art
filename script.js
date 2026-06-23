@@ -49,6 +49,9 @@
   // full-screen blit per frame instead of three.
   const baseCanvas = document.createElement("canvas");   // pristine statue
   const baseCtx = baseCanvas.getContext("2d");
+  const voidCanvas = document.createElement("canvas");   // void layer, clipped to statue
+  const voidCtx = voidCanvas.getContext("2d");
+  let silCanvas = null;                                   // statue silhouette mask
 
   // ---- state --------------------------------------------------------------
   let W = 0, H = 0, dpr = 1;
@@ -122,7 +125,7 @@
     W = Math.floor(cssW * dpr);
     H = Math.floor(cssH * dpr);
 
-    [canvas, baseCanvas].forEach((c) => { c.width = W; c.height = H; });
+    [canvas, baseCanvas, voidCanvas].forEach((c) => { c.width = W; c.height = H; });
     canvas.style.width = cssW + "px";
     canvas.style.height = cssH + "px";
 
@@ -138,6 +141,20 @@
     const tctx = tmp.getContext("2d");
     tctx.drawImage(sourceImg, 0, 0, baseW, baseH);
     basePixels = tctx.getImageData(0, 0, baseW, baseH).data;
+
+    // statue silhouette mask: white where marble, transparent on the dark bg —
+    // used to clip the void so holes appear ONLY on the sculpture.
+    silCanvas = document.createElement("canvas");
+    silCanvas.width = baseW; silCanvas.height = baseH;
+    const sctx = silCanvas.getContext("2d");
+    const sid = sctx.createImageData(baseW, baseH);
+    for (let p = 0, n = baseW * baseH; p < n; p++) {
+      const i = p * 4;
+      const lum = basePixels[i] * 0.299 + basePixels[i + 1] * 0.587 + basePixels[i + 2] * 0.114;
+      sid.data[i] = 255; sid.data[i + 1] = 255; sid.data[i + 2] = 255;
+      sid.data[i + 3] = lum >= 38 ? 255 : 0;
+    }
+    sctx.putImageData(sid, 0, 0);
 
     // breakable grid
     cellPx = Math.max(12, Math.round(22 * dpr));
@@ -418,28 +435,38 @@
     ctx.globalCompositeOperation = "source-over";
 
     // Hard-edged void: irregular opaque polygons, centres jittered OFF the grid
-    // and heavily overlapping, so the union is one organic torn shape (no cells,
-    // no soft halo). Each shrinks smoothly as its wound closes.
-    ctx.fillStyle = "#050506";
-    const nv = 9;
-    for (let i = 0; i < damaged.length; i++) {
-      const idx = damaged[i];
-      const vs = voidScale[idx];
-      if (vs <= 0.04) continue;
-      const c = idx % cols, r = (idx / cols) | 0;
-      const jx = (cellNoise(idx, 1) - 0.5) * cellPx * 0.55;
-      const jy = (cellNoise(idx, 2) - 0.5) * cellPx * 0.55;
-      const cx = (c + 0.5) * cellPx + jx, cy = (r + 0.5) * cellPx + jy;
-      const baseR = cellPx * 1.35 * (0.16 + 0.84 * vs);   // shrinks as it closes
-      ctx.beginPath();
-      for (let k = 0; k < nv; k++) {
-        const ang = (k / nv) * Math.PI * 2 + cellNoise(idx, k + 20) * 0.7;
-        const rr = baseR * (0.55 + cellNoise(idx, k) * 0.85);
-        const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
-        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // and heavily overlapping → one organic torn shape (no cells, no soft halo).
+    // Drawn to its own layer, then clipped to the statue silhouette so holes
+    // exist ONLY on the sculpture, never in the surrounding background.
+    if (damaged.length) {
+      voidCtx.globalCompositeOperation = "source-over";
+      voidCtx.clearRect(0, 0, W, H);
+      voidCtx.fillStyle = "#050506";
+      const nv = 9;
+      for (let i = 0; i < damaged.length; i++) {
+        const idx = damaged[i];
+        const vs = voidScale[idx];
+        if (vs <= 0.04) continue;
+        const c = idx % cols, r = (idx / cols) | 0;
+        const jx = (cellNoise(idx, 1) - 0.5) * cellPx * 0.55;
+        const jy = (cellNoise(idx, 2) - 0.5) * cellPx * 0.55;
+        const cx = (c + 0.5) * cellPx + jx, cy = (r + 0.5) * cellPx + jy;
+        const baseR = cellPx * 1.35 * (0.16 + 0.84 * vs);   // shrinks as it closes
+        voidCtx.beginPath();
+        for (let k = 0; k < nv; k++) {
+          const ang = (k / nv) * Math.PI * 2 + cellNoise(idx, k + 20) * 0.7;
+          const rr = baseR * (0.55 + cellNoise(idx, k) * 0.85);
+          const x = cx + Math.cos(ang) * rr, y = cy + Math.sin(ang) * rr;
+          if (k === 0) voidCtx.moveTo(x, y); else voidCtx.lineTo(x, y);
+        }
+        voidCtx.closePath();
+        voidCtx.fill();
       }
-      ctx.closePath();
-      ctx.fill();
+      // clip the void to the marble silhouette, then composite onto the scene
+      voidCtx.globalCompositeOperation = "destination-in";
+      voidCtx.drawImage(silCanvas, rect.x, rect.y, rect.w, rect.h);
+      voidCtx.globalCompositeOperation = "source-over";
+      ctx.drawImage(voidCanvas, 0, 0);
     }
 
     // --- fracture events: explode forward, hold, then REWIND (time reversal) --
